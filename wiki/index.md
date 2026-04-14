@@ -8,6 +8,45 @@ source: README.md
 
 RAGFlow 是一个基于深度文档理解的开源 RAG 引擎。本 Wiki 提供系统化的开发文档，涵盖架构设计、API 层、Agent 系统、RAG 引擎和部署指南。
 
+## 文档结构
+
+```mermaid
+mindmap
+  root((RAGFlow Wiki))
+    项目概述
+      项目简介
+      技术栈
+      目录结构
+    架构设计
+      整体架构
+      分层设计
+      数据流
+    API 层
+      Flask 服务器
+      蓝图系统
+      RESTful API
+      服务层
+    Agent 系统
+      系统架构
+      组件系统
+      Canvas 引擎
+      变量引用
+      工具系统
+      开发指南
+    RAG 引擎
+      文档处理
+      分块策略
+      向量化
+      检索机制
+      LLM 集成
+      GraphRAG
+    部署指南
+      Docker 部署
+      环境配置
+      服务架构
+      生产环境
+```
+
 ## 文档导航
 
 ### 00-项目概述

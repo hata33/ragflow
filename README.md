@@ -1,3 +1,33 @@
+  1. 日常开发（在 dev 分支工作）：
+  git checkout dev
+  # 修改代码...
+  git add .
+  git commit -m "你的修改说明"
+  git push origin dev
+
+  2. 更新上游代码（每周或每月执行一次）：
+  # 1. 切换到 main 分支
+  git checkout main
+
+  # 2. 拉取上游最新代码
+  git fetch upstream
+  git merge upstream/main
+
+  # 3. 推送更新到你的 Fork
+  git push origin main
+
+  # 4. 将更新合并到你的 dev 分支
+  git checkout dev
+  git merge main
+  git push origin dev
+
+  3. 如果遇到冲突：
+  # 解决冲突后
+  git add .
+  git commit -m "merge upstream: 解决冲突"
+  git push origin dev
+
+  
 <div align="center">
 <a href="https://cloud.ragflow.io/">
 <img src="web/src/assets/logo-with-text.svg" width="520" alt="ragflow logo">
