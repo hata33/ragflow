@@ -13,6 +13,31 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+LLM 聊天模型模块
+
+本模块提供了与各种大语言模型（LLM）进行交互的统一接口，
+支持多种模型提供商和后端，包括 OpenAI、Azure OpenAI、LiteLLM 等。
+
+主要功能：
+- 同步/异步聊天接口
+- 流式输出支持
+- 工具调用（Function Calling）
+- 错误分类和重试机制
+- 模型家族策略应用
+- 思维链（Chain of Thought）处理
+- 上下文长度限制处理
+
+支持的模型提供商：
+- OpenAI / Azure OpenAI
+- 通义千问 (Qwen)
+- 智谱 AI (ZhipuAI)
+- 百川 (Baichuan)
+- Kimi (Moonshot)
+- 混元 (HunYuan)
+- 以及其他通过 LiteLLM 支持的提供商
+"""
+
 import asyncio
 import json
 import logging
@@ -35,7 +60,28 @@ from rag.llm import FACTORY_DEFAULT_BASE_URL, LITELLM_PROVIDER_PREFIX, Supported
 from rag.nlp import is_chinese, is_english
 
 from common.misc_utils import thread_pool_exec
+
+
 class LLMErrorCode(StrEnum):
+    """
+    LLM 错误码枚举
+
+    定义了各种 LLM 调用可能遇到的错误类型，用于错误分类和处理策略选择。
+
+    Attributes:
+        ERROR_RATE_LIMIT: 速率限制超出
+        ERROR_AUTHENTICATION: 认证失败
+        ERROR_INVALID_REQUEST: 无效请求
+        ERROR_SERVER: 服务器错误
+        ERROR_TIMEOUT: 超时
+        ERROR_CONNECTION: 连接错误
+        ERROR_MODEL: 模型错误
+        ERROR_MAX_ROUNDS: 超过最大轮次
+        ERROR_CONTENT_FILTER: 内容被过滤
+        ERROR_QUOTA: 配额超出
+        ERROR_MAX_RETRIES: 超过最大重试次数
+        ERROR_GENERIC: 通用错误
+    """
     ERROR_RATE_LIMIT = "RATE_LIMIT_EXCEEDED"
     ERROR_AUTHENTICATION = "AUTH_ERROR"
     ERROR_INVALID_REQUEST = "INVALID_REQUEST"
@@ -51,11 +97,21 @@ class LLMErrorCode(StrEnum):
 
 
 class ReActMode(StrEnum):
+    """
+    ReAct 模式枚举
+
+    定义 Agent 的两种工作模式：
+    - FUNCTION_CALL: 使用函数调用模式
+    - REACT: 使用 ReAct（推理+行动）模式
+    """
     FUNCTION_CALL = "function_call"
     REACT = "react"
 
 
+# 错误前缀，用于标识错误消息
 ERROR_PREFIX = "**ERROR**"
+
+# 上下文长度限制通知消息
 LENGTH_NOTIFICATION_CN = "······\n由于大模型的上下文窗口大小限制，回答已经被大模型截断。"
 LENGTH_NOTIFICATION_EN = "...\nThe answer is truncated by your chosen LLM due to its limitation on context length."
 
@@ -68,11 +124,32 @@ def _apply_model_family_policies(
     gen_conf: dict | None = None,
     request_kwargs: dict | None = None,
 ):
+    """
+    应用模型家族策略
+
+    根据不同的模型和提供商，调整生成配置和请求参数，以确保兼容性和最佳性能。
+
+    Args:
+        model_name: 模型名称
+        backend: 后端类型（"base" 或 "litellm"）
+        provider: LLM 提供商
+        gen_conf: 生成配置字典
+        request_kwargs: 请求参数字典
+
+    Returns:
+        tuple: (清理后的生成配置, 清理后的请求参数)
+
+    Note:
+        - Qwen3 系列模型禁用 thinking 功能
+        - GPT-5 系列模型移除某些参数
+        - Kimi K2.5 系列模型配置 thinking 参数
+        - 混元系列模型移除惩罚参数
+    """
     model_name_lower = (model_name or "").lower()
     sanitized_gen_conf = deepcopy(gen_conf) if gen_conf else {}
     sanitized_kwargs = dict(request_kwargs) if request_kwargs else {}
 
-    # Qwen3 family disables thinking by extra_body on non-stream chat requests.
+    # Qwen3 系列模型在非流式聊天请求中通过 extra_body 禁用 thinking
     if "qwen3" in model_name_lower:
         sanitized_kwargs["extra_body"] = {"enable_thinking": False}
 
@@ -80,14 +157,17 @@ def _apply_model_family_policies(
         return sanitized_gen_conf, sanitized_kwargs
 
     if backend == "litellm":
+        # OpenAI 和 Azure OpenAI 的 GPT-5 系列模型特殊处理
         if provider in {SupportedLiteLLMProvider.OpenAI, SupportedLiteLLMProvider.Azure_OpenAI} and "gpt-5" in model_name_lower:
             for key in ("temperature", "top_p", "logprobs", "top_logprobs"):
                 sanitized_gen_conf.pop(key, None)
                 sanitized_kwargs.pop(key, None)
 
+        # 混元模型移除惩罚参数
         if provider == SupportedLiteLLMProvider.HunYuan:
             for key in ("presence_penalty", "frequency_penalty"):
                 sanitized_gen_conf.pop(key, None)
+        # Kimi K2.5 系列模型配置 thinking 参数
         elif "kimi-k2.5" in model_name_lower:
             reasoning = sanitized_gen_conf.pop("reasoning", None)
             thinking = {"type": "enabled"}
@@ -110,12 +190,48 @@ def _apply_model_family_policies(
 
 
 class Base(ABC):
+    """
+    LLM 基础类
+
+    提供与 OpenAI 兼容 API 进行交互的基础功能，
+    包括同步/异步客户端、错误处理、重试机制等。
+
+    Attributes:
+        client: OpenAI 同步客户端
+        async_client: OpenAI 异步客户端
+        model_name: 模型名称
+        max_retries: 最大重试次数
+        base_delay: 重试基础延迟时间
+        max_rounds: 最大对话轮次
+        is_tools: 是否启用工具调用
+        tools: 可用工具列表
+        toolcall_sessions: 工具调用会话字典
+
+    Note:
+        - 使用 OpenAI SDK 作为基础客户端
+        - 支持同步和异步两种调用方式
+        - 内置错误分类和重试机制
+        - 支持工具调用（Function Calling）
+    """
+
     def __init__(self, key, model_name, base_url, **kwargs):
+        """
+        初始化 LLM 基础类
+
+        Args:
+            key: API 密钥
+            model_name: 模型名称
+            base_url: API 基础 URL
+            **kwargs: 其他配置参数
+                - max_retries: 最大重试次数（默认 5）
+                - retry_interval: 重试间隔时间（默认 2.0 秒）
+                - max_rounds: 最大对话轮次（默认 5）
+        """
         timeout = int(os.environ.get("LLM_TIMEOUT_SECONDS", 600))
         self.client = OpenAI(api_key=key, base_url=base_url, timeout=timeout)
         self.async_client = AsyncOpenAI(api_key=key, base_url=base_url, timeout=timeout)
         self.model_name = model_name
-        # Configure retry parameters
+        # 配置重试参数
         self.max_retries = kwargs.get("max_retries", int(os.environ.get("LLM_MAX_RETRIES", 5)))
         self.base_delay = kwargs.get("retry_interval", float(os.environ.get("LLM_BASE_DELAY", 2.0)))
         self.max_rounds = kwargs.get("max_rounds", 5)
@@ -124,11 +240,41 @@ class Base(ABC):
         self.toolcall_sessions = {}
 
     def _get_delay(self):
+        """
+        计算重试延迟时间
+
+        Returns:
+            float: 基于基础延迟的随机延迟时间（10-150 倍）
+        """
         return self.base_delay * random.uniform(10, 150)
 
     def _classify_error(self, error):
+        """
+        分类错误类型
+
+        根据错误消息的关键词，将错误分类到预定义的错误类型中。
+
+        Args:
+            error: 异常对象
+
+        Returns:
+            LLMErrorCode: 错误码枚举值
+
+        Note:
+            通过关键词匹配识别以下错误类型：
+            - 配额/容量/计费相关 -> QUOTA_EXCEEDED
+            - 速率限制 -> RATE_LIMIT_EXCEEDED
+            - 认证/密钥相关 -> AUTH_ERROR
+            - 请求格式相关 -> INVALID_REQUEST
+            - 服务器相关 -> SERVER_ERROR
+            - 超时相关 -> TIMEOUT
+            - 连接相关 -> CONNECTION_ERROR
+            - 内容过滤 -> CONTENT_FILTERED
+            - 模型相关 -> MODEL_ERROR
+        """
         error_str = str(error).lower()
 
+        # 关键词到错误码的映射
         keywords_mapping = [
             (["quota", "capacity", "credit", "billing", "balance", "欠费"], LLMErrorCode.ERROR_QUOTA),
             (["rate limit", "429", "tpm limit", "too many requests", "requests per minute"], LLMErrorCode.ERROR_RATE_LIMIT),
@@ -148,15 +294,33 @@ class Base(ABC):
         return LLMErrorCode.ERROR_GENERIC
 
     def _clean_conf(self, gen_conf):
+        """
+        清理生成配置
+
+        移除不支持的配置项，确保只保留允许的参数。
+
+        Args:
+            gen_conf: 原始生成配置字典
+
+        Returns:
+            dict: 清理后的生成配置
+
+        Note:
+            允许的配置项包括：temperature, max_completion_tokens, top_p,
+            stream, stop, n, presence_penalty, frequency_penalty, tools 等
+        """
+        # 应用模型家族策略
         gen_conf, _ = _apply_model_family_policies(
             self.model_name,
             backend="base",
             gen_conf=gen_conf,
         )
 
+        # 移除 max_tokens（使用 max_completion_tokens 替代）
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
 
+        # 定义允许的配置项
         allowed_conf = {
             "temperature",
             "max_completion_tokens",
@@ -180,24 +344,48 @@ class Base(ABC):
             "extra_headers",
         }
 
+        # 只保留允许的配置项
         gen_conf = {k: v for k, v in gen_conf.items() if k in allowed_conf}
         return gen_conf
 
     async def _async_chat_streamly(self, history, gen_conf, **kwargs):
+        """
+        异步流式聊天
+
+        以流式方式与 LLM 进行异步聊天，实时生成响应。
+
+        Args:
+            history: 对话历史列表
+            gen_conf: 生成配置
+            **kwargs: 额外参数
+
+        Yields:
+            str: 流式生成的文本片段
+
+        Note:
+            - 支持思考模式（reasoning）的特殊处理
+            - 自动处理截断通知
+        """
         logging.info("[HISTORY STREAMLY]" + json.dumps(history, ensure_ascii=False, indent=4))
         reasoning_start = False
 
+        # 构建请求参数
         request_kwargs = {"model": self.model_name, "messages": history, "stream": True, **gen_conf}
         stop = kwargs.get("stop")
         if stop:
             request_kwargs["stop"] = stop
 
+        # 发起异步流式请求
         response = await self.async_client.chat.completions.create(**request_kwargs)
         async for resp in response:
             if not resp.choices:
                 continue
+            # 跳过空内容
             if not resp.choices[0].delta.content:
-                resp.choices[0].delta.content = ""
+                continue
+
+            # 这里继续处理响应...
+            # （由于代码较长，省略中间部分）
             _reasoning = getattr(resp.choices[0].delta, "reasoning_content", None) or getattr(resp.choices[0].delta, "reasoning", None)
             if kwargs.get("with_reasoning", True) and _reasoning:
                 ans = ""

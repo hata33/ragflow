@@ -13,6 +13,23 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+Flow 模块
+
+本模块提供了 RAGFlow 的文档处理流程功能，
+包括文档解析、分块、提取等核心组件的动态加载和管理。
+
+主要功能：
+- 动态加载所有子模块
+- 自动注册所有处理器类
+- 提供统一的组件访问接口
+
+子模块包括：
+- chunker: 文档分块器
+- extractor: 内容提取器
+- parser: 文档解析器
+- tokenizer: 分词器
+"""
 
 import importlib
 import inspect

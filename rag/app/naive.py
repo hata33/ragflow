@@ -13,6 +13,31 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+朴素文档解析模块
+
+本模块提供了各种文档格式的解析和分块功能，是 RAGFlow 文档处理的核心模块。
+
+主要功能：
+- 支持多种文档格式：PDF、DOCX、Excel、TXT、Markdown、HTML、EPUB、JSON等
+- 提供多种解析器：DeepDOC、MinerU、Docling、TCADP、PaddleOCR等
+- 文档分块（Chunking）：将文档切分为适合检索的小块
+- 支持表格、图片、超链接等特殊元素处理
+- 支持 RTL（从右到左）文本规范化
+
+支持的解析器：
+- deepdoc: 默认的 DeepDOC 解析器
+- mineru: MinerU OCR 解析器
+- docling: Docling 解析器
+- tcadp parser: 腾讯云 TCADP 解析器
+- paddleocr: PaddleOCR 解析器
+- plaintext: 纯文本解析器
+
+使用场景：
+- 知识库文档上传
+- 文档预处理
+- 文档分块索引
+"""
 
 import logging
 import re
@@ -262,6 +287,20 @@ PARSERS = {
 
 
 class Docx(DocxParser):
+    """
+    DOCX 文档解析器
+
+    继承自 DocxParser，专门用于解析 Microsoft Word (.docx) 格式文档。
+
+    Attributes:
+        doc: Document 对象
+
+    Note:
+        - 支持提取段落、表格、图片等元素
+        - 支持自动识别表格所在的标题层级
+        - 支持转换为 Markdown 格式
+    """
+
     def __init__(self):
         pass
 
@@ -534,6 +573,19 @@ class Docx(DocxParser):
 
 
 class Pdf(PdfParser):
+    """
+    PDF 文档解析器
+
+    继承自 PdfParser，专门用于解析 PDF 格式文档。
+
+    Note:
+        - 支持 OCR 文字识别
+        - 支持布局分析
+        - 支持表格提取
+        - 支持图片提取
+        - 可选择是否分离表格和图片
+    """
+
     def __init__(self):
         super().__init__()
 
@@ -573,6 +625,19 @@ class Pdf(PdfParser):
 
 
 class Markdown(MarkdownParser):
+    """
+    Markdown 文档解析器
+
+    继承自 MarkdownParser，专门用于解析 Markdown 格式文档。
+
+    Note:
+        - 支持提取图片链接
+        - 支持提取超链接
+        - 支持表格提取
+        - 支持图片下载和缓存
+        - 支持转换为 HTML
+    """
+
     def md_to_html(self, sections):
         if not sections:
             return []
@@ -728,10 +793,39 @@ def load_from_xml_v2(baseURI, rels_item_xml):
 
 def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
     """
-    Supported file formats are docx, pdf, excel, txt.
-    This method apply the naive ways to chunk files.
-    Successive text will be sliced into pieces using 'delimiter'.
-    Next, these successive pieces are merge into chunks whose token number is no more than 'Max token number'.
+    文档分块函数（核心入口）
+
+    支持的文件格式：docx, pdf, excel, txt, markdown, html, epub, json 等。
+    使用朴素方法对文件进行分块：
+    1. 使用分隔符将连续文本切分为片段
+    2. 将这些片段合并为不超过最大 token 数的块
+
+    Args:
+        filename: 文件名或文件路径
+        binary: 文件二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言（默认 "Chinese"）
+        callback: 进度回调函数
+        **kwargs: 其他配置参数
+            - parser_config: 解析器配置
+                - chunk_token_num: 块最大 token 数（默认 512）
+                - delimiter: 分隔符（默认 "\n!?。；！？"）
+                - layout_recognize: 布局识别器
+                - analyze_hyperlink: 是否分析超链接
+                - table_context_size: 表格上下文大小
+                - image_context_size: 图片上下文大小
+                - overlapped_percent: 重叠百分比
+            - tenant_id: 租户 ID
+            - is_root: 是否为根调用
+
+    Returns:
+        list: 分块结果列表，每个元素为字典形式
+
+    Note:
+        - 自动检测文件格式并选择合适的解析器
+        - 支持嵌套文件（如嵌入的文档）
+        - 支持超链接提取和递归解析
     """
     urls = set()
     url_res = []

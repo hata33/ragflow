@@ -13,6 +13,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+提示词生成器模块
+
+本模块提供了 LLM 提示词生成和消息格式化功能。
+
+主要功能：
+- 消息格式化：将检索结果格式化为 LLM 可理解的格式
+- Token 计数和截断：确保消息不超过模型限制
+- 模板渲染：使用 Jinja2 渲染提示词模板
+- 流式输出处理：处理 LLM 的流式响应
+- 工具调用处理：处理 Function Calling 相关逻辑
+
+使用场景：
+- RAG 问答生成
+- 知识库问答
+- 多轮对话管理
+"""
+
 import asyncio
 import datetime
 import json
@@ -28,16 +46,44 @@ from rag.prompts.template import load_prompt
 from common.constants import TAG_FLD
 from common.token_utils import encoder, num_tokens_from_string
 
+# 停止 token
 STOP_TOKEN = "<|STOP|>"
+
+# 完成任务标识
 COMPLETE_TASK = "complete_task"
+
+# 输入利用率
 INPUT_UTILIZATION = 0.5
 
 
 def get_value(d, k1, k2):
+    """
+    从字典中获取值，支持两个候选键
+
+    Args:
+        d: 字典对象
+        k1: 第一个候选键
+        k2: 第二个候选键
+
+    Returns:
+        对应的值，如果都不存在则返回 None
+    """
     return d.get(k1, d.get(k2))
 
 
 def chunks_format(reference):
+    """
+    格式化检索结果为标准格式
+
+    Args:
+        reference: 原始检索结果字典
+
+    Returns:
+        list: 格式化后的文档块列表
+
+    Note:
+        支持多种字段名称的兼容性处理
+    """
     if not reference or not isinstance(reference, dict):
         return []
     raw_chunks = reference.get("chunks", [])
@@ -65,6 +111,20 @@ def chunks_format(reference):
 
 
 def message_fit_in(msg, max_length=4000):
+    """
+    调整消息以适应最大长度限制
+
+    Args:
+        msg: 消息列表
+        max_length: 最大 token 数（默认 4000）
+
+    Returns:
+        tuple: (实际 token 数, 调整后的消息列表)
+
+    Note:
+        - 优先保留系统消息和最后一条用户消息
+        - 智能截断：根据消息重要性决定截断策略
+    """
     def count():
         nonlocal msg
         tks_cnts = []

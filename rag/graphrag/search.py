@@ -13,6 +13,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+知识图谱搜索模块
+
+本模块提供了基于知识图谱的检索功能，用于增强 RAG 系统的检索效果。
+
+主要功能：
+- 知识图谱实体检索
+- 关系检索
+- 图遍历检索
+- 查询重写和扩展
+- 多跳邻居检索
+
+使用场景：
+- 知识图谱增强的 RAG
+- 实体关系问答
+- 多跳推理查询
+"""
+
 import asyncio
 import json
 import logging
@@ -33,7 +51,36 @@ from common.doc_store.doc_store_base import OrderByExpr
 
 
 class KGSearch(Dealer):
+    """
+    知识图谱搜索类
+
+    继承自 Dealer，提供基于知识图谱的检索功能。
+
+    Attributes:
+        继承自 Dealer 的所有属性
+
+    Note:
+        - 支持实体检索和关系检索
+        - 支持查询重写和扩展
+        - 使用 LLM 进行智能查询分析
+    """
+
     async def _chat(self, llm_bdl, system, history, gen_conf):
+        """
+        异步聊天（带缓存）
+
+        Args:
+            llm_bdl: LLM 模型实例
+            system: 系统提示词
+            history: 对话历史
+            gen_conf: 生成配置
+
+        Returns:
+            str: LLM 响应
+
+        Raises:
+            Exception: 当响应包含错误时
+        """
         response = get_llm_cache(llm_bdl.llm_name, system, history, gen_conf)
         if response:
             return response
@@ -44,6 +91,23 @@ class KGSearch(Dealer):
         return response
 
     async def query_rewrite(self, llm, question, idxnms, kb_ids):
+        """
+        查询重写
+
+        使用 LLM 分析查询并提取相关的实体类型和实体。
+
+        Args:
+            llm: LLM 模型实例
+            question: 原始查询
+            idxnms: 索引名称列表
+            kb_ids: 知识库 ID 列表
+
+        Returns:
+            tuple: (类型关键词, 实体列表)
+
+        Raises:
+            Exception: 当 JSON 解析失败时
+        """
         ty2ents = await get_entity_type2samples(idxnms, kb_ids)
         hint_prompt = PROMPTS["minirag_query2kwd"].format(query=question,
                                                           TYPE_POOL=json.dumps(ty2ents, ensure_ascii=False, indent=2))
@@ -67,6 +131,16 @@ class KGSearch(Dealer):
                 raise e
 
     def _ent_info_from_(self, es_res, sim_thr=0.3):
+        """
+        从 ES 结果中提取实体信息
+
+        Args:
+            es_res: Elasticsearch 检索结果
+            sim_thr: 相似度阈值（默认 0.3）
+
+        Returns:
+            dict: 实体信息字典
+        """
         res = {}
         flds = ["content_with_weight", "_score", "entity_kwd", "rank_flt", "n_hop_with_weight"]
         es_res = self.dataStore.get_fields(es_res, flds)
@@ -87,6 +161,16 @@ class KGSearch(Dealer):
         return res
 
     def _relation_info_from_(self, es_res, sim_thr=0.3):
+        """
+        从 ES 结果中提取关系信息
+
+        Args:
+            es_res: Elasticsearch 检索结果
+            sim_thr: 相似度阈值（默认 0.3）
+
+        Returns:
+            dict: 关系信息字典
+        """
         res = {}
         es_res = self.dataStore.get_fields(es_res, ["content_with_weight", "_score", "from_entity_kwd", "to_entity_kwd",
                                                    "weight_int"])

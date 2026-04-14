@@ -13,6 +13,22 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+文件工具模块
+
+本模块提供了文件处理相关的实用工具函数。
+
+主要功能：
+- 文件类型检测：通过魔数检测 ZIP、PDF、OLE 等文件类型
+- 嵌入文件提取：从复合文档中提取嵌入的文件
+- 超链接提取：从 PDF、DOCX 等文档中提取超链接
+- HTML 内容提取：从 URL 提取 HTML 内容
+
+使用场景：
+- 文档上传时的类型检测
+- 文档解析时的嵌入文件处理
+- 超链接内容的递归解析
+"""
 
 import io
 import hashlib
@@ -27,22 +43,70 @@ import olefile
 
 
 def _is_zip(h: bytes) -> bool:
+    """
+    检测是否为 ZIP 格式文件
+
+    Args:
+        h: 文件头（前 8 字节）
+
+    Returns:
+        bool: 是否为 ZIP 格式
+    """
     return h.startswith(b"PK\x03\x04") or h.startswith(b"PK\x05\x06") or h.startswith(b"PK\x07\x08")
 
 
 def _is_pdf(h: bytes) -> bool:
+    """
+    检测是否为 PDF 格式文件
+
+    Args:
+        h: 文件头（前 8 字节）
+
+    Returns:
+        bool: 是否为 PDF 格式
+    """
     return h.startswith(b"%PDF-")
 
 
 def _is_ole(h: bytes) -> bool:
+    """
+    检测是否为 OLE 格式文件
+
+    Args:
+        h: 文件头（前 8 字节）
+
+    Returns:
+        bool: 是否为 OLE 格式
+    """
     return h.startswith(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1")
 
 
 def _sha10(b: bytes) -> str:
+    """
+    计算字节流的 SHA256 哈希值（前 10 位）
+
+    Args:
+        b: 字节流
+
+    Returns:
+        str: 哈希值的前 10 位
+    """
     return hashlib.sha256(b).hexdigest()[:10]
 
 
 def _guess_ext(b: bytes) -> str:
+    """
+    根据文件头猜测文件扩展名
+
+    Args:
+        b: 字节流（前 8 字节）
+
+    Returns:
+        str: 文件扩展名（如 ".pdf", ".docx"）
+
+    Note:
+        支持 ZIP、PDF、OLE 等格式检测
+    """
     h = b[:8]
     if _is_zip(h):
         try:
@@ -64,8 +128,19 @@ def _guess_ext(b: bytes) -> str:
     return ".bin"
 
 
-# Try to extract the real embedded payload from OLE's Ole10Native
 def _extract_ole10native_payload(data: bytes) -> bytes:
+    """
+    尝试从 OLE 的 Ole10Native 中提取真正的嵌入负载
+
+    Args:
+        data: OLE 数据
+
+    Returns:
+        bytes: 提取的负载
+
+    Note:
+        OLE10Native 是 OLE 格式中用于存储嵌入对象的结构
+    """
     try:
         pos = 0
         if len(data) < 4:

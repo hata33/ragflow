@@ -13,6 +13,32 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+重排序模型模块
+
+本模块提供了统一的重排序模型接口，支持多种重排序服务提供商。
+重排序模型用于对检索结果进行重新排序，提高检索质量。
+
+主要功能：
+- 统一的重排序模型接口定义
+- 支持多种重排序服务提供商（Jina、Cohere、VoyageAI等）
+- 计算查询与文档之间的相关性分数
+- 分数归一化处理
+
+支持的重排序服务提供商：
+- Jina
+- Xinference
+- LocalAI
+- NVIDIA
+- Cohere/VLLM
+- 百度千帆 (BaiduYiyan)
+- Voyage AI
+- 通义千问 (QWen)
+- HuggingFace
+- GPUStack
+- 以及其他 10+ 提供商
+"""
+
 import json
 from abc import ABC
 from urllib.parse import urljoin
@@ -26,21 +52,67 @@ from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, truncate, total_token_count_from_response
 
 class Base(ABC):
+    """
+    重排序模型基类
+
+    定义了所有重排序模型必须实现的接口规范。
+    所有具体的重排序提供商类都应继承此类并实现相应方法。
+
+    Attributes:
+        无（由子类实现）
+
+    Note:
+        这是一个抽象基类，定义了核心方法：
+        - similarity: 计算查询与文本列表的相关性分数
+        - _normalize_rank: 归一化分数到 [0, 1] 区间
+    """
+
     def __init__(self, key, model_name, **kwargs):
         """
-        Abstract base class constructor.
-        Parameters are not stored; initialization is left to subclasses.
+        初始化基类
+
+        Args:
+            key: API 密钥
+            model_name: 模型名称
+            **kwargs: 其他配置参数
+
+        Note:
+            此方法接受参数以保持接口一致性，但不存储参数。
+            子类应根据需要实现自己的初始化逻辑。
         """
         pass
 
     def similarity(self, query: str, texts: list):
+        """
+        计算查询与文本列表的相关性分数
+
+        Args:
+            query: 查询文本
+            texts: 候选文档列表
+
+        Returns:
+            tuple: (相关性分数数组, token 计数)
+
+        Raises:
+            NotImplementedError: 子类必须实现此方法
+        """
         raise NotImplementedError("Please implement encode method!")
 
     @staticmethod
     def _normalize_rank(rank: np.ndarray) -> np.ndarray:
         """
-        Normalize rank values to the range 0 to 1.
-        Avoids division by zero if all ranks are identical.
+        归一化分数到 [0, 1] 区间
+
+        Args:
+            rank: 原始分数数组
+
+        Returns:
+            np.ndarray: 归一化后的分数数组
+
+        Note:
+            - 使用最小-最大归一化
+            - 当所有分数相同时，返回全零数组避免除零错误
+            - 使用 1e-3 作为容差判断是否相等
         """
         min_rank = np.min(rank)
         max_rank = np.max(rank)

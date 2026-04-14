@@ -13,6 +13,29 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+RAPTOR 模块
+
+Recursive Abstractive Processing for Tree-Organized Retrieval
+递归抽象处理树形组织检索
+
+本模块实现了 RAPTOR 算法，一种用于文档检索和层次化聚类的先进方法。
+
+主要功能：
+- 层次化聚类：使用高斯混合模型对文档块进行聚类
+- 递归摘要：对聚类结果生成摘要，构建层次结构
+- 树形检索：在层次结构中进行高效的相似性检索
+- 缓存机制：缓存 LLM 和嵌入结果以提高性能
+
+使用场景：
+- 长文档检索
+- 层次化问答
+- 多粒度信息检索
+
+参考文献：
+- RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval
+"""
+
 import asyncio
 import logging
 import re
@@ -36,6 +59,27 @@ from common.misc_utils import thread_pool_exec
 
 
 class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
+    """
+    RAPTOR 算法实现类
+
+    实现递归抽象处理树形组织检索算法，用于构建文档的层次化表示。
+
+    Attributes:
+        _max_cluster: 最大聚类数量
+        _llm_model: LLM 模型实例
+        _embd_model: 嵌入模型实例
+        _threshold: 相似度阈值
+        _prompt: 摘要生成提示词
+        _max_token: 最大 token 数
+        _max_errors: 最大错误次数
+        _error_count: 当前错误计数
+
+    Note:
+        - 使用 UMAP 进行降维
+        - 使用高斯混合模型进行聚类
+        - 递归生成摘要直到达到停止条件
+    """
+
     def __init__(
         self,
         max_cluster,
@@ -46,6 +90,18 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
         threshold=0.1,
         max_errors=3,
     ):
+        """
+        初始化 RAPTOR 处理器
+
+        Args:
+            max_cluster: 最大聚类数量
+            llm_model: LLM 模型实例
+            embd_model: 嵌入模型实例
+            prompt: 摘要生成提示词
+            max_token: 最大 token 数（默认 512）
+            threshold: 相似度阈值（默认 0.1）
+            max_errors: 最大错误次数（默认 3）
+        """
         self._max_cluster = max_cluster
         self._llm_model = llm_model
         self._embd_model = embd_model
@@ -54,8 +110,18 @@ class RecursiveAbstractiveProcessing4TreeOrganizedRetrieval:
         self._max_token = max_token
         self._max_errors = max(1, max_errors)
         self._error_count = 0
-        
+
     def _check_task_canceled(self, task_id: str, message: str = ""):
+        """
+        检查任务是否已取消
+
+        Args:
+            task_id: 任务 ID
+            message: 附加消息
+
+        Raises:
+            TaskCanceledException: 当任务已取消时
+        """
         if task_id and has_canceled(task_id):
             log_msg = f"Task {task_id} cancelled during RAPTOR {message}."
             logging.info(log_msg)

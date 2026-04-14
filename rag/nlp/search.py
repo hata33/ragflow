@@ -13,6 +13,29 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+全文检索模块
+
+本模块提供了 RAGFlow 的核心检索功能，支持全文搜索、向量搜索、
+混合检索等多种检索方式。主要功能包括：
+
+主要功能：
+- 全文检索（基于 Elasticsearch/Infinity）
+- 向量相似度检索
+- 混合检索（结合全文和向量）
+- 重排序（Rerank）
+- 引文插入（Citation）
+- 标签提取和匹配
+- 目录检索（TOC-based retrieval）
+- 父子块检索
+
+使用场景：
+- 知识库问答
+- 文档检索
+- 相似内容推荐
+- 引文溯源
+"""
+
 import json
 import logging
 import re
@@ -34,12 +57,48 @@ def index_name(uid): return f"ragflow_{uid}"
 
 
 class Dealer:
+    """
+    检索代理类
+
+    提供文档检索、重排序、引文插入等核心检索功能。
+
+    Attributes:
+        qryr: 全文查询器
+        dataStore: 文档存储连接
+
+    Note:
+        - 支持全文检索、向量检索、混合检索
+        - 支持重排序提高检索质量
+        - 支持引文自动插入
+    """
+
     def __init__(self, dataStore: DocStoreConnection):
+        """
+        初始化检索代理
+
+        Args:
+            dataStore: 文档存储连接对象
+        """
         self.qryr = query.FulltextQueryer()
         self.dataStore = dataStore
 
     @dataclass
     class SearchResult:
+        """
+        检索结果数据类
+
+        用于封装检索操作的结果数据。
+
+        Attributes:
+            total: 总结果数
+            ids: 文档 ID 列表
+            query_vector: 查询向量（可选）
+            field: 字段值字典（可选）
+            highlight: 高亮结果（可选）
+            aggregation: 聚合结果（可选）
+            keywords: 提取的关键词（可选）
+            group_docs: 分组文档（可选）
+        """
         total: int
         ids: list[str]
         query_vector: list[float] | None = None
@@ -50,6 +109,21 @@ class Dealer:
         group_docs: list[list] | None = None
 
     async def get_vector(self, txt, emb_mdl, topk=10, similarity=0.1):
+        """
+        获取文本的向量表示
+
+        Args:
+            txt: 输入文本
+            emb_mdl: 嵌入模型
+            topk: 返回前 K 个结果（默认 10）
+            similarity: 相似度阈值（默认 0.1）
+
+        Returns:
+            MatchDenseExpr: 向量匹配表达式
+
+        Raises:
+            Exception: 当向量维度不正确时
+        """
         qv, _ = await thread_pool_exec(emb_mdl.encode_queries, txt)
         shape = np.array(qv).shape
         if len(shape) > 1:
@@ -60,6 +134,26 @@ class Dealer:
         return MatchDenseExpr(vector_column_name, embedding_data, 'float', 'cosine', topk, {"similarity": similarity})
 
     def get_filters(self, req):
+        """
+        从请求中提取过滤条件
+
+        Args:
+            req: 请求字典
+
+        Returns:
+            dict: 过滤条件字典
+
+        Note:
+            支持的过滤字段：
+            - kb_ids -> kb_id: 知识库 ID
+            - doc_ids -> doc_id: 文档 ID
+            - knowledge_graph_kwd: 知识图谱关键词
+            - available_int: 可用性标识
+            - entity_kwd: 实体关键词
+            - from_entity_kwd: 源实体关键词
+            - to_entity_kwd: 目标实体关键词
+            - removed_kwd: 已移除关键词
+        """
         condition = dict()
         for key, field in {"kb_ids": "kb_id", "doc_ids": "doc_id"}.items():
             if key in req and req[key] is not None:
@@ -77,6 +171,33 @@ class Dealer:
                highlight: bool | list | None = None,
                rank_feature: dict | None = None
                ):
+        """
+        执行检索操作
+
+        Args:
+            req: 检索请求字典，包含：
+                - question: 查询问题
+                - page: 页码（默认 1）
+                - topk: 返回结果数（默认 1024）
+                - size: 每页大小（默认 topk）
+                - fields: 返回字段列表
+                - similarity: 相似度阈值
+                - sort: 排序方式
+            idx_names: 索引名称（单个或列表）
+            kb_ids: 知识库 ID 列表
+            emb_mdl: 嵌入模型（可选）
+            highlight: 是否高亮（默认 False）
+            rank_feature: 排序特征（可选）
+
+        Returns:
+            SearchResult: 检索结果对象
+
+        Note:
+            - 支持全文检索、向量检索、混合检索
+            - 如果没有嵌入模型，只使用全文检索
+            - 如果有嵌入模型，使用混合检索
+            - 结果为空时会降低阈值重试
+        """
         if highlight is None:
             highlight = False
 
@@ -177,6 +298,25 @@ class Dealer:
 
     def insert_citations(self, answer, chunks, chunk_v,
                          embd_mdl, tkweight=0.1, vtweight=0.9):
+        """
+        在回答中插入引文
+
+        Args:
+            answer: 生成的回答文本
+            chunks: 候选文档块列表
+            chunk_v: 文档块向量列表
+            embd_mdl: 嵌入模型
+            tkweight: 词元相似度权重（默认 0.1）
+            vtweight: 向量相似度权重（默认 0.9）
+
+        Returns:
+            tuple: (带引文的回答, 引用的文档块 ID 集合)
+
+        Note:
+            - 将回答分割为句子
+            - 计算每个句子与文档块的相似度
+            - 为高相似度的句子添加引文标记 [ID:x]
+        """
         assert len(chunks) == len(chunk_v)
         if not chunks:
             return answer, set([])
@@ -298,6 +438,24 @@ class Dealer:
                vtweight=0.7, cfield="content_ltks",
                rank_feature: dict | None = None
                ):
+        """
+        对检索结果进行重排序
+
+        Args:
+            sres: 检索结果对象
+            query: 查询文本
+            tkweight: 词元相似度权重（默认 0.3）
+            vtweight: 向量相似度权重（默认 0.7）
+            cfield: 内容字段名（默认 "content_ltks"）
+            rank_feature: 排序特征（可选）
+
+        Returns:
+            tuple: (混合相似度数组, 词元相似度数组, 向量相似度数组)
+
+        Note:
+            - 使用混合相似度：词元相似度 + 向量相似度 + 排序特征
+            - 标题权重 x2，重要词权重 x5，问题词权重 x6
+        """
         _, keywords = self.qryr.question(query)
         vector_size = len(sres.query_vector)
         vector_column = f"q_{vector_size}_vec"
@@ -336,6 +494,25 @@ class Dealer:
     def rerank_by_model(self, rerank_mdl, sres, query, tkweight=0.3,
                         vtweight=0.7, cfield="content_ltks",
                         rank_feature: dict | None = None):
+        """
+        使用重排序模型对检索结果进行重排序
+
+        Args:
+            rerank_mdl: 重排序模型
+            sres: 检索结果对象
+            query: 查询文本
+            tkweight: 词元相似度权重（默认 0.3）
+            vtweight: 向量相似度权重（默认 0.7）
+            cfield: 内容字段名（默认 "content_ltks"）
+            rank_feature: 排序特征（可选）
+
+        Returns:
+            tuple: (混合相似度数组, 词元相似度数组, 向量相似度数组)
+
+        Note:
+            - 使用重排序模型计算向量相似度
+            - 结合词元相似度和排序特征
+        """
         _, keywords = self.qryr.question(query)
 
         for i in sres.ids:
@@ -379,6 +556,37 @@ class Dealer:
             highlight=False,
             rank_feature: dict | None = {PAGERANK_FLD: 10},
     ):
+        """
+        执行检索操作（主要入口方法）
+
+        Args:
+            question: 查询问题
+            embd_mdl: 嵌入模型
+            tenant_ids: 租户 ID（单个或列表）
+            kb_ids: 知识库 ID 列表
+            page: 页码
+            page_size: 每页大小
+            similarity_threshold: 相似度阈值（默认 0.2）
+            vector_similarity_weight: 向量相似度权重（默认 0.3）
+            top: 返回的最大结果数（默认 1024）
+            doc_ids: 文档 ID 列表（可选）
+            aggs: 是否返回聚合结果（默认 True）
+            rerank_mdl: 重排序模型（可选）
+            highlight: 是否高亮（默认 False）
+            rank_feature: 排序特征（默认 PageRank 权重 10）
+
+        Returns:
+            dict: 包含以下键的字典：
+                - total: 总结果数
+                - chunks: 文档块列表
+                - doc_aggs: 文档聚合统计
+
+        Note:
+            - 先检索 RERANK_LIMIT 个结果
+            - 根据权重重排序
+            - 应用相似度阈值过滤
+            - 分页返回结果
+        """
         ranks = {"total": 0, "chunks": [], "doc_aggs": {}}
         if not question:
             return ranks
@@ -531,6 +739,21 @@ class Dealer:
                    offset=0,
                    fields=["docnm_kwd", "content_with_weight", "img_id"],
                    sort_by_position: bool = False):
+        """
+        获取文档的所有块列表
+
+        Args:
+            doc_id: 文档 ID
+            tenant_id: 租户 ID
+            kb_ids: 知识库 ID 列表
+            max_count: 最大返回数量（默认 1024）
+            offset: 偏移量（默认 0）
+            fields: 返回字段列表
+            sort_by_position: 是否按位置排序（默认 False）
+
+        Returns:
+            list: 文档块列表
+        """
         condition = {"doc_id": doc_id}
 
         fields_set = set(fields or [])
@@ -565,18 +788,55 @@ class Dealer:
         return res
 
     def all_tags(self, tenant_id: str, kb_ids: list[str], S=1000):
+        """
+        获取所有标签及其计数
+
+        Args:
+            tenant_id: 租户 ID
+            kb_ids: 知识库 ID 列表
+            S: 平滑参数（默认 1000）
+
+        Returns:
+            list: 标签列表，每个元素为 (标签名, 计数) 元组
+        """
         if not self.dataStore.index_exist(index_name(tenant_id), kb_ids[0]):
             return []
         res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id), kb_ids, ["tag_kwd"])
         return self.dataStore.get_aggregation(res, "tag_kwd")
 
     def all_tags_in_portion(self, tenant_id: str, kb_ids: list[str], S=1000):
+        """
+        获取所有标签的占比
+
+        Args:
+            tenant_id: 租户 ID
+            kb_ids: 知识库 ID 列表
+            S: 平滑参数（默认 1000）
+
+        Returns:
+            dict: 标签到占比的映射
+        """
         res = self.dataStore.search([], [], {}, [], OrderByExpr(), 0, 0, index_name(tenant_id), kb_ids, ["tag_kwd"])
         res = self.dataStore.get_aggregation(res, "tag_kwd")
         total = np.sum([c for _, c in res])
         return {t: (c + 1) / (total + S) for t, c in res}
 
     def tag_content(self, tenant_id: str, kb_ids: list[str], doc, all_tags, topn_tags=3, keywords_topn=30, S=1000):
+        """
+        为文档内容提取标签
+
+        Args:
+            tenant_id: 租户 ID
+            kb_ids: 知识库 ID 列表
+            doc: 文档对象
+            all_tags: 全局标签统计
+            topn_tags: 返回前 N 个标签（默认 3）
+            keywords_topn: 关键词数量（默认 30）
+            S: 平滑参数（默认 1000）
+
+        Returns:
+            bool: 是否成功提取标签
+        """
         idx_nm = index_name(tenant_id)
         match_txt = self.qryr.paragraph(doc["title_tks"] + " " + doc["content_ltks"], doc.get("important_kwd", []),
                                         keywords_topn)
@@ -591,6 +851,20 @@ class Dealer:
         return True
 
     def tag_query(self, question: str, tenant_ids: str | list[str], kb_ids: list[str], all_tags, topn_tags=3, S=1000):
+        """
+        为查询提取相关标签
+
+        Args:
+            question: 查询文本
+            tenant_ids: 租户 ID（单个或列表）
+            kb_ids: 知识库 ID 列表
+            all_tags: 全局标签统计
+            topn_tags: 返回前 N 个标签（默认 3）
+            S: 平滑参数（默认 1000）
+
+        Returns:
+            dict: 标签到权重的映射
+        """
         if isinstance(tenant_ids, str):
             idx_nms = index_name(tenant_ids)
         else:
@@ -606,6 +880,25 @@ class Dealer:
         return {a.replace(".", "_"): max(1, c) for a, c in tag_fea}
 
     async def retrieval_by_toc(self, query: str, chunks: list[dict], tenant_ids: list[str], chat_mdl, topn: int = 6):
+        """
+        基于目录（TOC）进行检索
+
+        Args:
+            query: 查询文本
+            chunks: 初始检索结果
+            tenant_ids: 租户 ID 列表
+            chat_mdl: 聊天模型（用于 LLM 辅助选择）
+            topn: 返回前 N 个结果（默认 6）
+
+        Returns:
+            list: 重排序后的文档块列表
+
+        Note:
+            - 选择最相关的文档
+            - 获取该文档的目录结构
+            - 使用 LLM 根据目录选择相关章节
+            - 根据选择结果更新相似度分数
+        """
         from rag.prompts.generator import relevant_chunks_with_toc # moved from the top of the file to avoid circular import
         if not chunks:
             return []
@@ -670,6 +963,22 @@ class Dealer:
         return sorted(chunks, key=lambda x: x["similarity"] * -1)[:topn]
 
     def retrieval_by_children(self, chunks: list[dict], tenant_ids: list[str]):
+        """
+        基于父子关系进行检索
+
+        Args:
+            chunks: 子块列表
+            tenant_ids: 租户 ID 列表
+
+        Returns:
+            list: 包含父块的文档块列表
+
+        Note:
+            - 将子块按父块 ID 分组
+            - 获取父块内容
+            - 计算父块的相似度（子块的平均值）
+            - 将父块添加到结果中
+        """
         if not chunks:
             return []
         idx_nms = [index_name(tid) for tid in tenant_ids]
