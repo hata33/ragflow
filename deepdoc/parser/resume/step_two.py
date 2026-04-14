@@ -14,6 +14,20 @@
 #  limitations under the License.
 #
 
+"""
+简历数据第二步处理模块 (step_two)
+
+本模块是简历解析的核心处理步骤，负责将第一步提取的结构化字段
+进一步加工为可用于搜索和匹配的特征字段。
+
+主要功能：
+- 学历信息处理：提取学校排名、学历等级、专业信息、学校标签等
+- 工作经历处理：提取公司标签、职位分词、行业分词、工作时长等
+- 项目经历处理：提取项目名称和描述的分词
+- 基本信息处理：姓名识别与拼音生成、手机号清洗、完整性评分等
+- 数据类型处理：将 numpy.int64 等类型转为原生 Python 类型
+"""
+
 import logging
 import re
 import copy
@@ -30,11 +44,21 @@ from contextlib import contextmanager
 
 
 class TimeoutException(Exception):
+    """超时异常，用于处理耗时过长的操作。"""
     pass
 
 
 @contextmanager
 def time_limit(seconds):
+    """
+    超时控制上下文管理器，用于限制代码块的最大执行时间。
+
+    Args:
+        seconds (int): 超时秒数
+
+    Raises:
+        TimeoutException: 当执行时间超过指定秒数时抛出
+    """
     def signal_handler(signum, frame):
         raise TimeoutException("Timed out!")
 
@@ -46,19 +70,39 @@ def time_limit(seconds):
         signal.alarm(0)
 
 
+# 全局拼音工具实例
 ENV = None
 PY = Pinyin()
 
 
 def rmHtmlTag(line):
+    """
+    移除字符串中的 HTML 标签。
+
+    Args:
+        line (str): 含 HTML 标签的字符串
+
+    Returns:
+        str: 移除标签后的纯文本
+    """
     return re.sub(r"<[a-z0-9.\"=';,:\+_/ -]+>", " ", line, count=100000, flags=re.IGNORECASE)
 
 
 def highest_degree(dg):
+    """
+    从学历列表中返回最高学历。
+
+    Args:
+        dg: 学历名称或学历名称列表
+
+    Returns:
+        str: 最高学历名称，如 "博士"、"硕士" 等
+    """
     if not dg:
         return ""
     if isinstance(dg, str):
         dg = [dg]
+    # 学历等级映射表，数值越大等级越高
     m = {"初中": 0, "高中": 1, "中专": 2, "大专": 3, "专升本": 4, "本科": 5, "硕士": 6, "博士": 7, "博士后": 8}
     return sorted([(d, m.get(d, -1)) for d in dg], key=lambda x: x[1] * -1)[0][0]
 

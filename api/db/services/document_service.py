@@ -43,10 +43,20 @@ from common import settings
 
 
 class DocumentService(CommonService):
+    """文档服务层，封装对 Document 模型的所有 CRUD 和业务逻辑操作。
+
+    职责包括：
+    - 文档的查询、分页、过滤与统计
+    - 文档解析任务的创建、进度同步与取消
+    - 文档删除时的级联清理（任务、chunks、缩略图、知识图谱引用等）
+    - 文档上传并同步解析（用于对话中直接上传）
+    """
+
     model = Document
 
     @classmethod
     def get_cls_model_fields(cls):
+        """返回 Document 模型中需要对外暴露的字段列表，用于 select 查询投影。"""
         return [
             cls.model.id,
             cls.model.thumbnail,
@@ -78,7 +88,14 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_list(cls, kb_id, page_number, items_per_page, orderby, desc, keywords, id, name, suffix=None, run=None, doc_ids=None):
+        """根据知识库 ID 分页查询文档列表。
+
+        通过 JOIN File2Document、File、UserCanvas 表获取关联信息，
+        支持按 id、name、keywords、doc_ids、suffix、run 等条件过滤，
+        返回 (文档列表, 总数)，列表中包含每个文档的元数据字段。
+        """
         fields = cls.get_cls_model_fields()
+        # 多表 JOIN：Document -> File2Document -> File -> UserCanvas（仅 DataFlow 类型）
         docs = (
             cls.model.select(*[*fields, UserCanvas.title])
             .join(File2Document, on=(File2Document.document_id == cls.model.id))
@@ -91,12 +108,15 @@ class DocumentService(CommonService):
         if name:
             docs = docs.where(cls.model.name == name)
         if keywords:
+            # 关键词搜索：忽略大小写模糊匹配文档名
             docs = docs.where(fn.LOWER(cls.model.name).contains(keywords.lower()))
         if doc_ids:
             docs = docs.where(cls.model.id.in_(doc_ids))
         if suffix:
+            # 按文件后缀过滤，如 [".pdf", ".docx"]
             docs = docs.where(cls.model.suffix.in_(suffix))
         if run:
+            # 按运行状态过滤，如 RUNNING、CANCEL、DONE 等
             docs = docs.where(cls.model.run.in_(run))
         if desc:
             docs = docs.order_by(cls.model.getter_by(orderby).desc())
@@ -107,6 +127,7 @@ class DocumentService(CommonService):
         docs = docs.paginate(page_number, items_per_page)
 
         docs_list = list(docs.dicts())
+        # 批量查询当前页文档的元数据并合并到结果中
         doc_ids_on_page = [doc["id"] for doc in docs_list]
         metadata_map = DocMetadataService.get_metadata_for_documents(doc_ids_on_page, kb_id) if doc_ids_on_page else {}
         for doc in docs_list:
@@ -116,6 +137,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def check_doc_health(cls, tenant_id: str, filename):
+        """检查文档上传前的健康约束条件：用户文件数上限和文件名长度。"""
         import os
 
         MAX_FILE_NUM_PER_USER = int(os.environ.get("MAX_FILE_NUM_PER_USER", 0))
@@ -128,6 +150,11 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_by_kb_id(cls, kb_id, page_number, items_per_page, orderby, desc, keywords, run_status, types, suffix, doc_ids=None, return_empty_metadata=False):
+        """按知识库 ID 查询文档，支持多条件过滤和分页。
+
+        相比 get_list，此方法额外关联了 pipeline_name 和创建者昵称。
+        当 return_empty_metadata=True 时，仅返回没有元数据的文档（用于过滤场景）。
+        """
         fields = cls.get_cls_model_fields()
         if keywords:
             docs = (
@@ -159,6 +186,7 @@ class DocumentService(CommonService):
 
         metadata_map = {}
         if return_empty_metadata:
+            # 获取所有有元数据的文档 ID，然后排除它们，只返回无元数据的文档
             metadata_map = DocMetadataService.get_metadata_for_documents(None, kb_id)
             doc_ids_with_metadata = set(metadata_map.keys())
             if doc_ids_with_metadata:
@@ -413,6 +441,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def insert(cls, doc):
+        """插入文档记录，同时原子性地递增对应知识库的 doc_num 计数。"""
         if not cls.save(**doc):
             raise RuntimeError("Database error (Document)!")
         if not KnowledgebaseService.atomic_increase_doc_num_by_id(doc["kb_id"]):
@@ -422,12 +451,24 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def remove_document(cls, doc, tenant_id):
+        """完整删除一个文档，级联清理所有关联资源。
+
+        执行顺序：
+        1. 从数据库删除文档记录并更新 KB 计数器
+        2. 取消该文档所有正在运行的任务（通过 Redis 设置取消标记）
+        3. 从数据库删除该文档的所有任务记录
+        4. 删除文档关联的 chunk 图片（对象存储）
+        5. 删除文档缩略图（对象存储）
+        6. 从 doc store (ES/Infinity) 删除所有 chunks
+        7. 删除文档元数据
+        8. 清理知识图谱中对该文档的引用
+        每个步骤独立 try/except，确保单步失败不阻塞后续清理。
+        """
         from api.db.services.task_service import TaskService, cancel_all_task_of
 
         if not cls.delete_document_and_update_kb_counts(doc.id):
+            # 文档已被并发请求删除，直接返回（幂等）
             return True
-
-        # Cancel all running tasks first Using preset function in task_service.py ---  set cancel flag in Redis
         try:
             cancel_all_task_of(doc.id)
             logging.info(f"Cancelled all tasks for document {doc.id}")
@@ -493,6 +534,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def delete_chunk_images(cls, doc, tenant_id):
+        """分页删除文档所有 chunk 关联的图片（从对象存储中移除）。"""
         page = 0
         page_size = 1000
         while True:
@@ -508,6 +550,11 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_newly_uploaded(cls):
+        """获取最近 10 分钟内新上传且尚未开始解析的文档列表。
+
+        查询条件：状态 VALID、非虚拟文件、进度为 0、运行状态为 RUNNING、更新时间在 10 分钟内。
+        用于后台任务调度器拉取待处理文档。
+        """
         fields = [
             cls.model.id,
             cls.model.kb_id,
@@ -541,6 +588,11 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_unfinished_docs(cls):
+        """获取所有未完成解析的文档，包括：
+        - 进度在 0~1 之间的文档
+        - 仍有未完成任务的文档
+        - 解析失败但有未失败任务（可重试）的文档（含 GraphRAG/RAPTOR/Mindmap）
+        """
         fields = [cls.model.id, cls.model.process_begin_at, cls.model.parser_config, cls.model.progress_msg,
                   cls.model.run, cls.model.parser_id]
         unfinished_task_query = Task.select(Task.doc_id).where(
@@ -561,6 +613,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def increment_chunk_num(cls, doc_id, kb_id, token_num, chunk_num, duration):
+        """递增文档和知识库的 token_num、chunk_num，累加处理时长。"""
         num = (
             cls.model.update(token_num=cls.model.token_num + token_num, chunk_num=cls.model.chunk_num + chunk_num, process_duration=cls.model.process_duration + duration)
             .where(cls.model.id == doc_id)
@@ -574,6 +627,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def decrement_chunk_num(cls, doc_id, kb_id, token_num, chunk_num, duration):
+        """递减文档和知识库的 token_num、chunk_num（重新解析时使用），累加处理时长。"""
         num = (
             cls.model.update(token_num=cls.model.token_num - token_num, chunk_num=cls.model.chunk_num - chunk_num, process_duration=cls.model.process_duration + duration)
             .where(cls.model.id == doc_id)
@@ -634,6 +688,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def clear_chunk_num_when_rerun(cls, doc_id):
+        """重新运行文档解析时，将文档的 token/chunk 计数从知识库中扣减。"""
         doc = cls.model.get_by_id(doc_id)
         assert doc, "Can't fine document in database."
 
@@ -650,6 +705,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_tenant_id(cls, doc_id):
+        """通过文档 ID 查询所属租户 ID（通过 Knowledgebase 关联）。"""
         docs = cls.model.select(Knowledgebase.tenant_id).join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id)).where(cls.model.id == doc_id, Knowledgebase.status == StatusEnum.VALID.value)
         docs = docs.dicts()
         if not docs:
@@ -659,6 +715,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_knowledgebase_id(cls, doc_id):
+        """通过文档 ID 获取其所属知识库 ID。"""
         docs = cls.model.select(cls.model.kb_id).where(cls.model.id == doc_id)
         docs = docs.dicts()
         if not docs:
@@ -677,6 +734,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def accessible(cls, doc_id, user_id):
+        """检查用户是否有权访问该文档（用户需属于文档所在知识库的租户）。"""
         docs = (
             cls.model.select(cls.model.id)
             .join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id))
@@ -692,6 +750,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def accessible4deletion(cls, doc_id, user_id):
+        """检查用户是否有权删除该文档（需为知识库创建者的租户中的 NORMAL 或 OWNER 角色）。"""
         docs = (
             cls.model.select(cls.model.id)
             .join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id))
@@ -707,6 +766,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_embd_id(cls, doc_id):
+        """获取文档所属知识库配置的 embedding 模型 ID。"""
         docs = cls.model.select(Knowledgebase.embd_id).join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id)).where(cls.model.id == doc_id, Knowledgebase.status == StatusEnum.VALID.value)
         docs = docs.dicts()
         if not docs:
@@ -727,6 +787,8 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_chunking_config(cls, doc_id):
+        """获取文档的完整分块配置，包括解析器 ID、parser_config、知识库语言、
+        embedding 模型、以及租户的 img2txt/asr/llm 模型信息。"""
         configs = (
             cls.model.select(
                 cls.model.id,
@@ -779,6 +841,11 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def update_parser_config(cls, id, config):
+        """深度合并更新文档的解析器配置。
+
+        使用 DFS 递归合并：新增字段直接添加，字典类型递归合并，其他类型覆盖。
+        如果新配置不含 "raptor" 但旧配置有，则移除旧配置中的 "raptor"。
+        """
         if not config:
             return
         e, d = cls.get_by_id(id)
@@ -786,6 +853,7 @@ class DocumentService(CommonService):
             raise LookupError(f"Document({id}) not found.")
 
         def dfs_update(old, new):
+            """深度优先递归合并字典：新增 key 直接写入，已有 key 按类型决定合并或覆盖。"""
             for k, v in new.items():
                 if k not in old:
                     old[k] = v
@@ -809,6 +877,11 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def begin2parse(cls, doc_id, keep_progress=False):
+        """标记文档开始解析，设置进度消息和处理开始时间。
+
+        keep_progress=False 时重置进度和运行状态（普通解析任务）；
+        keep_progress=True 时保留当前进度（用于 GraphRAG/RAPTOR/Mindmap 等后处理任务）。
+        """
         info = {
             "progress_msg": "Task is queued...",
             "process_begin_at": get_format_time(),
@@ -823,6 +896,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def update_progress(cls):
+        """定时同步所有未完成文档的解析进度（由后台调度器定期调用）。"""
         docs = cls.get_unfinished_docs()
 
         cls._sync_progress(docs)
@@ -830,6 +904,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def update_progress_immediately(cls, docs: list[dict]):
+        """立即同步指定文档列表的解析进度（无需查询未完成文档）。"""
         if not docs:
             return
 
@@ -838,6 +913,15 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def _sync_progress(cls, docs: list[dict]):
+        """核心进度同步逻辑：遍历每个文档，聚合其所有子任务的进度和状态。
+
+        对于每个文档：
+        1. 查询该文档的所有任务
+        2. 聚合进度（取平均）和状态消息
+        3. 根据任务完成情况判定文档状态：全部完成→DONE，有失败→FAIL，否则→RUNNING
+        4. 对于特殊任务类型（GraphRAG/RAPTOR/Mindmap）且文档已解析完成时，冻结进度不回退
+        5. 更新文档的进度、状态、处理时长等信息到数据库
+        """
         from api.db.services.task_service import TaskService
 
         for d in docs:
@@ -848,9 +932,9 @@ class DocumentService(CommonService):
                 msg = []
                 prg = 0
                 finished = True
-                bad = 0
+                bad = 0  # 失败任务计数
                 e, doc = DocumentService.get_by_id(d["id"])
-                status = doc.run  # TaskStatus.RUNNING.value
+                status = doc.run
                 if status == TaskStatus.CANCEL.value:
                     continue
                 doc_progress = doc.progress if doc and doc.progress else 0.0
@@ -859,6 +943,7 @@ class DocumentService(CommonService):
                 for t in tsks:
                     task_type = (t.task_type or "").lower()
                     if task_type in PIPELINE_SPECIAL_PROGRESS_FREEZE_TASK_TYPES:
+                        # 特殊任务（如 GraphRAG）运行时标记，用于进度冻结判断
                         special_task_running = True
                     if 0 <= t.progress < 1:
                         finished = False
@@ -868,23 +953,26 @@ class DocumentService(CommonService):
                     if t.progress_msg.strip():
                         msg.append(t.progress_msg)
                     priority = max(priority, t.priority)
-                prg /= len(tsks)
+                prg /= len(tsks)  # 平均进度
                 if finished and bad:
+                    # 所有任务结束但有失败的 → 标记为 FAIL
                     prg = -1
                     status = TaskStatus.FAIL.value
                 elif finished:
+                    # 所有任务正常结束 → 标记为 DONE
                     prg = 1
                     status = TaskStatus.DONE.value
                 elif not finished:
                     status = TaskStatus.RUNNING.value
 
-                # only for special task and parsed docs and unfinished
+                # 特殊任务冻结条件：特殊任务运行中 + 文档已解析完成 + 整体未完成
+                # 防止后处理任务（如 GraphRAG）导致已完成的主解析进度被覆盖
                 freeze_progress = special_task_running and doc_progress >= 1 and not finished
                 msg = "\n".join(sorted(msg))
                 begin_at = d.get("process_begin_at")
                 if not begin_at:
                     begin_at = datetime.now()
-                    # fallback
+                    # 兜底：如果数据库中没有开始时间，使用当前时间并回写
                     cls.update_by_id(d["id"], {"process_begin_at": begin_at})
 
                 info = {"process_duration": max(datetime.timestamp(datetime.now()) - begin_at.timestamp(), 0), "run": status}
@@ -892,12 +980,14 @@ class DocumentService(CommonService):
                     info["progress"] = prg
                 if msg:
                     info["progress_msg"] = msg
+                    # 特殊任务创建时，追加队列等待信息
                     if msg.endswith("created task graphrag") or msg.endswith("created task raptor") or msg.endswith("created task mindmap"):
                         info["progress_msg"] += "\n%d tasks are ahead in the queue..." % get_queue_length(priority)
                 else:
                     info["progress_msg"] = "%d tasks are ahead in the queue..." % get_queue_length(priority)
                 info["update_time"] = current_timestamp()
                 info["update_date"] = get_format_time()
+                # 仅更新未取消的文档，跳过已被用户取消的文档
                 (cls.model.update(info).where((cls.model.id == d["id"]) & ((cls.model.run.is_null(True)) | (cls.model.run != TaskStatus.CANCEL.value))).execute())
             except Exception as e:
                 if str(e).find("'0'") < 0:
@@ -920,6 +1010,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def do_cancel(cls, doc_id):
+        """检查文档是否已被取消或解析失败（progress < 0）。"""
         try:
             _, doc = DocumentService.get_by_id(doc_id)
             return doc.run == TaskStatus.CANCEL.value or doc.progress < 0
@@ -930,6 +1021,7 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def knowledgebase_basic_info(cls, kb_id: str) -> dict[str, int]:
+        """获取知识库下文档的聚合统计信息：处理中、已完成、失败、已取消、已下载数量。"""
         # cancelled: run == "2"
         cancelled = cls.model.select(fn.COUNT(1)).where((cls.model.kb_id == kb_id) & (cls.model.run == TaskStatus.CANCEL)).scalar()
         downloaded = cls.model.select(fn.COUNT(1)).where(cls.model.kb_id == kb_id, cls.model.source_type != "local").scalar()
@@ -963,6 +1055,12 @@ class DocumentService(CommonService):
 
     @classmethod
     def run(cls, tenant_id: str, doc: dict, kb_table_num_map: dict):
+        """启动文档解析任务。
+
+        如果文档配置了 pipeline_id，则走 DataFlow 流程；
+        否则根据文件存储地址创建普通解析任务。
+        对于 TABLE 类型解析器，会检查并清理知识库的 field_map。
+        """
         from api.db.services.task_service import queue_dataflow, queue_tasks
         from api.db.services.file2document_service import File2DocumentService
 
@@ -985,9 +1083,11 @@ class DocumentService(CommonService):
 
 
 def queue_raptor_o_graphrag_tasks(sample_doc_id, ty, priority, fake_doc_id="", doc_ids=[]):
-    """
-    You can provide a fake_doc_id to bypass the restriction of tasks at the knowledgebase level.
-    Optionally, specify a list of doc_ids to determine which documents participate in the task.
+    """创建 GraphRAG / RAPTOR / Mindmap 后处理任务并推入 Redis 队列。
+
+    使用 xxhash 对分块配置和任务参数生成摘要（digest），用于任务去重。
+    通过 fake_doc_id 可绕过知识库级别的任务限制；
+    通过 doc_ids 指定参与任务的文档范围。
     """
     assert ty in ["graphrag", "raptor", "mindmap"], "type should be graphrag, raptor or mindmap"
 
@@ -997,7 +1097,7 @@ def queue_raptor_o_graphrag_tasks(sample_doc_id, ty, priority, fake_doc_id="", d
         hasher.update(str(chunking_config[field]).encode("utf-8"))
 
     def new_task():
-        nonlocal sample_doc_id
+        """构建一个新的后处理任务字典模板。"""
         return {
             "id": get_uuid(),
             "doc_id": sample_doc_id["id"],
@@ -1012,17 +1112,18 @@ def queue_raptor_o_graphrag_tasks(sample_doc_id, ty, priority, fake_doc_id="", d
     for field in ["doc_id", "from_page", "to_page"]:
         hasher.update(str(task.get(field, "")).encode("utf-8"))
     hasher.update(ty.encode("utf-8"))
-    task["digest"] = hasher.hexdigest()
-    bulk_insert_into_db(Task, [task], True)
+    task["digest"] = hasher.hexdigest()  # 基于配置+参数的摘要，用于去重
+    bulk_insert_into_db(Task, [task], True)  # 插入任务记录到数据库
 
-    task["doc_id"] = fake_doc_id
-    task["doc_ids"] = doc_ids
-    DocumentService.begin2parse(sample_doc_id["id"], keep_progress=True)
+    task["doc_id"] = fake_doc_id  # 用 fake_doc_id 替换实际 doc_id（绕过 KB 级别限制）
+    task["doc_ids"] = doc_ids  # 记录实际参与任务的文档 ID 列表
+    DocumentService.begin2parse(sample_doc_id["id"], keep_progress=True)  # 保持进度不重置
     assert REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
     return task["id"]
 
 
 def get_queue_length(priority):
+    """查询指定优先级的 Redis 队列中待处理消息数量（lag）。"""
     group_info = REDIS_CONN.queue_info(settings.get_svr_queue_name(priority), SVR_CONSUMER_GROUP_NAME)
     if not group_info:
         return 0
@@ -1030,6 +1131,17 @@ def get_queue_length(priority):
 
 
 def doc_upload_and_parse(conversation_id, file_objs, user_id):
+    """在对话上下文中上传文件并同步解析：分块 → 生成思维导图 → 向量化 → 写入 doc store。
+
+    流程：
+    1. 通过会话 ID 找到关联的知识库和 embedding 模型
+    2. 上传文件并创建文档记录
+    3. 使用线程池并发执行文件分块（支持多种解析器）
+    4. 对非图片文档生成思维导图（MindMap）
+    5. 对所有 chunks 进行 embedding 并批量写入 ES/Infinity
+    6. 更新文档的 chunk/token 计数
+    返回所有新创建的文档 ID 列表。
+    """
     from api.db.services.api_service import API4ConversationService
     from api.db.services.conversation_service import ConversationService
     from api.db.services.dialog_service import DialogService
@@ -1039,11 +1151,13 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
     from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
     from rag.app import audio, email, naive, picture, presentation
 
+    # 查找会话（支持普通会话和 API 会话）
     e, conv = ConversationService.get_by_id(conversation_id)
     if not e:
         e, conv = API4ConversationService.get_by_id(conversation_id)
     assert e, "Conversation not found!"
 
+    # 获取对话关联的第一个知识库
     e, dia = DialogService.get_by_id(conv.dialog_id)
     if not dia.kb_ids:
         raise LookupError("No dataset associated with this conversation. Please add a dataset before uploading documents")
@@ -1057,12 +1171,14 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
         embd_model_config = get_model_config_by_type_and_name(kb.tenant_id, LLMType.EMBEDDING, kb.embd_id)
     embd_mdl = LLMBundle(kb.tenant_id, embd_model_config, lang=kb.language)
 
+    # 上传文件到知识库
     err, files = FileService.upload_document(kb, file_objs, user_id)
     assert not err, "\n".join(err)
 
     def dummy(prog=None, msg=""):
         pass
 
+    # 解析器工厂映射：根据文档类型选择对应的解析模块
     FACTORY = {ParserType.PRESENTATION.value: presentation, ParserType.PICTURE.value: picture, ParserType.AUDIO.value: audio, ParserType.EMAIL.value: email}
     parser_config = {"chunk_token_num": 4096, "delimiter": "\n!?;。；！？", "layout_recognize": "Plain Text", "table_context_size": 0, "image_context_size": 0}
     exe = ThreadPoolExecutor(max_workers=12)
@@ -1070,11 +1186,13 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
     doc_nm = {}
     for d, blob in files:
         doc_nm[d["id"]] = d["name"]
+    # 使用线程池并发执行文件分块
     for d, blob in files:
         kwargs = {"callback": dummy, "parser_config": parser_config, "from_page": 0, "to_page": 100000, "tenant_id": kb.tenant_id, "lang": kb.language}
         threads.append(exe.submit(FACTORY.get(d["parser_id"], naive).chunk, d["name"], blob, **kwargs))
 
     for (docinfo, _), th in zip(files, threads):
+        # 收集分块结果，处理含图片的 chunk：将图片存储到对象存储并替换为 img_id 引用
         docs = []
         doc = {"doc_id": docinfo["id"], "kb_id": [kb.id]}
         for ck in th.result():
@@ -1105,6 +1223,7 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
     es_bulk_size = 64
 
     def embedding(doc_id, cnts, batch_size=16):
+        """对一批文本内容进行 embedding，返回向量列表，同时统计 chunk 和 token 数量。"""
         nonlocal embd_mdl, chunk_counts, token_counts
         vectors = []
         for i in range(0, len(cnts), batch_size):
@@ -1123,6 +1242,7 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
     for doc_id in docids:
         cks = [c for c in docs if c["doc_id"] == doc_id]
 
+        # 对非图片文档生成思维导图（使用 LLM 抽取）
         if parser_ids[doc_id] != ParserType.PICTURE.value:
             from rag.graphrag.general.mind_map_extractor import MindMapExtractor
 
@@ -1149,11 +1269,14 @@ def doc_upload_and_parse(conversation_id, file_objs, user_id):
 
         vectors = embedding(doc_id, [c["content_with_weight"] for c in cks])
         assert len(cks) == len(vectors)
+        # 将 embedding 向量附加到每个 chunk
         for i, d in enumerate(cks):
             v = vectors[i]
             d["q_%d_vec" % len(v)] = v
+        # 批量写入 doc store（ES/Infinity）
         for b in range(0, len(cks), es_bulk_size):
             if try_create_idx:
+                # 首次写入时创建索引
                 if not settings.docStoreConn.index_exist(idxnm, kb_id):
                     settings.docStoreConn.create_idx(idxnm, kb_id, len(vectors[0]), kb.parser_id)
                 try_create_idx = False

@@ -13,6 +13,19 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+图像预处理算子模块。
+
+提供用于 OCR 和文档分析流水线的各种图像预处理操作，包括：
+- 图像解码（DecodeImage）
+- 图像归一化（StandardizeImag、NormalizeImage）
+- 通道格式转换（ToCHWImage、Permute）
+- 图像缩放（LinearResize、Resize、DetResizeForTest、E2EResizeForTest、KieResize、SRResize）
+- 图像填充（Pad、PadStride）
+- 灰度通道格式化（GrayImageChannelFormat）
+- 非极大值抑制（nms）
+- 通用预处理流水线（preprocess）
+"""
 
 import logging
 import sys
@@ -26,18 +39,33 @@ from rag.utils.lazy_image import ensure_pil_image
 
 
 class DecodeImage:
-    """ decode image """
+    """图像解码器，将二进制图像数据解码为 numpy 数组。"""
 
     def __init__(self,
                  img_mode='RGB',
                  channel_first=False,
                  ignore_orientation=False,
                  **kwargs):
+        """
+        Args:
+            img_mode (str): 输出图像颜色模式，'RGB' 或 'GRAY'，默认为 'RGB'
+            channel_first (bool): 是否将通道维度放在前面（CHW 格式），默认为 False
+            ignore_orientation (bool): 是否忽略 EXIF 方向信息，默认为 False
+        """
         self.img_mode = img_mode
         self.channel_first = channel_first
         self.ignore_orientation = ignore_orientation
 
     def __call__(self, data):
+        """
+        执行图像解码。
+
+        Args:
+            data (dict): 包含 'image' 键的字典，值为二进制图像数据
+
+        Returns:
+            dict: 更新后的字典，'image' 键值为解码后的 numpy 数组；解码失败返回 None
+        """
         img = data['image']
         if six.PY2:
             assert isinstance(img, str) and len(
@@ -54,10 +82,12 @@ class DecodeImage:
         if img is None:
             return None
         if self.img_mode == 'GRAY':
+            # 灰度图转为 BGR 三通道以保持一致性
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         elif self.img_mode == 'RGB':
             assert img.shape[2] == 3, 'invalid shape of image[%s]' % (
                 img.shape)
+            # BGR -> RGB 通道反转
             img = img[:, :, ::-1]
 
         if self.channel_first:
@@ -68,12 +98,14 @@ class DecodeImage:
 
 
 class StandardizeImag:
-    """normalize image
+    """
+    图像标准化处理器（基于均值和标准差）。
+
     Args:
-        mean (list): im - mean
-        std (list): im / std
-        is_scale (bool): whether need im / 255
-        norm_type (str): type in ['mean_std', 'none']
+        mean (list): 各通道均值，用于 (im - mean) 操作
+        std (list): 各通道标准差，用于 (im / std) 操作
+        is_scale (bool): 是否先将像素值缩放到 [0,1]，默认为 True
+        norm_type (str): 归一化类型，'mean_std' 执行标准归一化，'none' 跳过
     """
 
     def __init__(self, mean, std, is_scale=True, norm_type='mean_std'):
@@ -84,12 +116,14 @@ class StandardizeImag:
 
     def __call__(self, im, im_info):
         """
+        执行图像标准化。
+
         Args:
-            im (np.ndarray): image (np.ndarray)
-            im_info (dict): info of image
+            im (np.ndarray): 输入图像数组
+            im_info (dict): 图像信息字典
+
         Returns:
-            im (np.ndarray):  processed image (np.ndarray)
-            im_info (dict): info of processed image
+            tuple: (标准化后的图像, 图像信息字典)
         """
         im = im.astype(np.float32, copy=False)
         if self.is_scale:
@@ -97,6 +131,7 @@ class StandardizeImag:
             im *= scale
 
         if self.norm_type == 'mean_std':
+            # 广播均值和标准差到 (1, 1, C) 形状，进行逐通道标准化
             mean = np.array(self.mean)[np.newaxis, np.newaxis, :]
             std = np.array(self.std)[np.newaxis, np.newaxis, :]
             im -= mean
@@ -105,14 +140,25 @@ class StandardizeImag:
 
 
 class NormalizeImage:
-    """ normalize image such as subtract mean, divide std
+    """
+    图像归一化处理器，支持自定义缩放因子、均值和标准差。
+
+    与 StandardizeImag 不同，本类接受字典输入，适用于流水线处理方式。
     """
 
     def __init__(self, scale=None, mean=None, std=None, order='chw', **kwargs):
+        """
+        Args:
+            scale: 像素缩放因子，默认为 1/255。支持字符串表达式如 '1./255.'
+            mean (list): 各通道均值，默认为 ImageNet 均值 [0.485, 0.456, 0.406]
+            std (list): 各通道标准差，默认为 ImageNet 标准差 [0.229, 0.224, 0.225]
+            order (str): 通道顺序，'chw' 或 'hwc'，默认为 'chw'
+        """
         if isinstance(scale, str):
             try:
                 scale = float(scale)
             except ValueError:
+                # 处理字符串形式的缩放因子，如 '1./255.'
                 if '/' in scale:
                     parts = scale.split('/')
                     scale = ast.literal_eval(parts[0]) / ast.literal_eval(parts[1])
@@ -122,11 +168,21 @@ class NormalizeImage:
         mean = mean if mean is not None else [0.485, 0.456, 0.406]
         std = std if std is not None else [0.229, 0.224, 0.225]
 
+        # 根据通道顺序决定均值/标准差的形状
         shape = (3, 1, 1) if order == 'chw' else (1, 1, 3)
         self.mean = np.array(mean).reshape(shape).astype('float32')
         self.std = np.array(std).reshape(shape).astype('float32')
 
     def __call__(self, data):
+        """
+        执行图像归一化：先缩放像素值，再减去均值除以标准差。
+
+        Args:
+            data (dict): 包含 'image' 键的字典，值可为 numpy 数组或 PIL Image
+
+        Returns:
+            dict: 更新后的字典，'image' 键值为归一化后的 float32 数组
+        """
         img = data['image']
         from PIL import Image
         pil = ensure_pil_image(img)
@@ -134,19 +190,32 @@ class NormalizeImage:
             img = np.array(pil)
         assert isinstance(img,
                           np.ndarray), "invalid input 'img' in NormalizeImage"
+        # 公式: (img * scale - mean) / std
         data['image'] = (
             img.astype('float32') * self.scale - self.mean) / self.std
         return data
 
 
 class ToCHWImage:
-    """ convert hwc image to chw image
+    """
+    将 HWC 格式的图像转换为 CHW 格式。
+
+    部分深度学习框架要求输入为 (通道, 高度, 宽度) 格式。
     """
 
     def __init__(self, **kwargs):
         pass
 
     def __call__(self, data):
+        """
+        执行 HWC -> CHW 格式转换。
+
+        Args:
+            data (dict): 包含 'image' 键的字典
+
+        Returns:
+            dict: 更新后的字典，'image' 为 CHW 格式的数组
+        """
         img = data['image']
         from PIL import Image
         pil = ensure_pil_image(img)
@@ -157,10 +226,29 @@ class ToCHWImage:
 
 
 class KeepKeys:
+    """
+    从数据字典中提取指定键的值，返回为列表。
+
+    用于预处理流水线的最后一步，将字典转换为模型输入所需的列表格式。
+    """
+
     def __init__(self, keep_keys, **kwargs):
+        """
+        Args:
+            keep_keys (list[str]): 需要保留的键名列表
+        """
         self.keep_keys = keep_keys
 
     def __call__(self, data):
+        """
+        提取指定键的值。
+
+        Args:
+            data (dict): 输入数据字典
+
+        Returns:
+            list: 按保留键顺序排列的值列表
+        """
         data_list = []
         for key in self.keep_keys:
             data_list.append(data[key])
@@ -168,7 +256,19 @@ class KeepKeys:
 
 
 class Pad:
+    """
+    图像填充算子。
+
+    将图像填充到指定尺寸或使其尺寸为 size_div 的整数倍，
+    以满足某些网络模型对输入尺寸的要求。
+    """
+
     def __init__(self, size=None, size_div=32, **kwargs):
+        """
+        Args:
+            size (int|list|None): 目标尺寸 [H, W]，为 None 时按 size_div 自动计算
+            size_div (int): 尺寸对齐除数，默认为 32
+        """
         if size is not None and not isinstance(size, (int, list, tuple)):
             raise TypeError("Type of target_size is invalid. Now is {}".format(
                 type(size)))
@@ -178,7 +278,15 @@ class Pad:
         self.size_div = size_div
 
     def __call__(self, data):
+        """
+        执行图像填充。
 
+        Args:
+            data (dict): 包含 'image' 键的字典
+
+        Returns:
+            dict: 更新后的字典，'image' 已填充到目标尺寸
+        """
         img = data['image']
         img_h, img_w = img.shape[0], img.shape[1]
         if self.size:
@@ -187,12 +295,14 @@ class Pad:
                 img_h < resize_h2 and img_w < resize_w2
             ), '(h, w) of target size should be greater than (img_h, img_w)'
         else:
+            # 计算不小于原图且为 size_div 整数倍的尺寸
             resize_h2 = max(
                 int(math.ceil(img.shape[0] / self.size_div) * self.size_div),
                 self.size_div)
             resize_w2 = max(
                 int(math.ceil(img.shape[1] / self.size_div) * self.size_div),
                 self.size_div)
+        # 在右侧和底部填充零值
         img = cv2.copyMakeBorder(
             img,
             0,
@@ -206,11 +316,15 @@ class Pad:
 
 
 class LinearResize:
-    """resize image by target_size and max_size
+    """
+    线性插值缩放算子。
+
+    根据目标尺寸对图像进行缩放，支持保持宽高比或强制缩放到目标尺寸。
+
     Args:
-        target_size (int): the target size of image
-        keep_ratio (bool): whether keep_ratio or not, default true
-        interp (int): method of resize
+        target_size (int|list): 目标尺寸 [H, W] 或单个整数（正方形）
+        keep_ratio (bool): 是否保持宽高比，默认为 True
+        interp (int): OpenCV 插值方法，默认为 cv2.INTER_LINEAR
     """
 
     def __init__(self, target_size, keep_ratio=True, interp=cv2.INTER_LINEAR):
