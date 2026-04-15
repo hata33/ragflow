@@ -82,11 +82,31 @@ from rag.nlp import (
 
 
 def _normalize_section_text_for_rtl_presentation_forms(sections):
+    """
+    规范化从右到左（RTL）语言的文本呈现形式
+
+    该函数用于处理阿拉伯语等从右到左书写的语言，规范化其字符呈现形式。
+    支持多种数据结构：元组、列表和字符串。
+
+    Args:
+        sections: 文本段落列表，可以是以下格式之一：
+            - list[str]: 纯字符串列表
+            - list[tuple]: 元组列表（每个元组的第一个元素是文本）
+            - list[list]: 列表的列表（每个子列表的第一个元素是文本）
+
+    Returns:
+        与输入结构相同的规范化文本列表
+
+    Note:
+        - 元组和列表的第一个元素会被规范化，其他元素保持不变
+        - 空值（None或空容器）会直接返回，不做处理
+    """
     if not sections:
         return sections
 
     normalized_sections = []
     for section in sections:
+        # 处理元组格式：(text, image, table, ...)
         if isinstance(section, tuple):
             if not section:
                 normalized_sections.append(section)
@@ -95,6 +115,7 @@ def _normalize_section_text_for_rtl_presentation_forms(sections):
             normalized_text = normalize_arabic_presentation_forms(text)
             normalized_sections.append((normalized_text, *section[1:]))
             continue
+        # 处理列表格式：[text, image, table, ...]
         if isinstance(section, list):
             if not section:
                 normalized_sections.append(section)
@@ -103,17 +124,49 @@ def _normalize_section_text_for_rtl_presentation_forms(sections):
             normalized_text = normalize_arabic_presentation_forms(text)
             normalized_sections.append([normalized_text, *section[1:]])
             continue
+        # 处理纯字符串格式
         normalized_sections.append(normalize_arabic_presentation_forms(section))
 
     return normalized_sections
 
 
 def by_deepdoc(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+    """
+    使用 DeepDOC 解析器解析 PDF 文档
+
+    DeepDOC 是 RAGFlow 的默认 PDF 解析器，基于 PyMuPDF 实现，
+    支持文本提取、布局分析和表格识别。
+
+    Args:
+        filename: PDF 文件名或路径
+        binary: PDF 文件的二进制内容（可选，与 filename 二选一）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数，格式为 callback(progress, message)
+        pdf_cls: 自定义 PDF 解析器类（可选）
+        **kwargs: 其他参数
+
+    Returns:
+        tuple: (sections, tables, pdf_parser)
+            - sections: 文本段落列表，每个元素为 (text, tag) 元组
+            - tables: 表格列表，每个表格包含 HTML 格式的表格数据
+            - pdf_parser: PDF 解析器实例
+
+    Processing Steps:
+        1. 创建 PDF 解析器实例（使用自定义类或默认的 Pdf 类）
+        2. 调用解析器提取文本和表格
+        3. 使用视觉模型增强表格内容（可选）
+        4. 返回解析结果
+    """
     callback = callback
     binary = binary
+    # 创建解析器实例：优先使用传入的 pdf_cls，否则使用默认的 Pdf 类
     pdf_parser = pdf_cls() if pdf_cls else Pdf()
+    # 执行 PDF 解析：提取文本段落和表格
     sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
 
+    # 使用视觉模型增强表格内容（如图表理解、数据提取等）
     tables = vision_figure_parser_pdf_wrapper(
         tbls=tables,
         sections=sections,
@@ -136,13 +189,47 @@ def by_mineru(
     tenant_id: str | None = None,
     **kwargs,
 ):
+    """
+    使用 MinerU OCR 解析器解析 PDF 文档
+
+    MinerU 是一个基于深度学习的 OCR 解析器，特别适合处理扫描件、
+    图片型 PDF 等需要文字识别的场景。
+
+    Args:
+        filename: PDF 文件名或路径
+        binary: PDF 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        pdf_cls: 忽略（保留参数兼容性）
+        parse_method: 解析方法，"raw" 或 "auto"（默认 "raw"）
+        mineru_llm_name: MinerU 模型名称（可选，未指定时从数据库查询）
+        tenant_id: 租户 ID，用于查找模型配置
+        **kwargs: 其他参数
+
+    Returns:
+        tuple: (sections, tables, pdf_parser) 或 (None, None, None)
+            - 成功时返回解析结果
+            - 失败时返回三个 None
+
+    Processing Steps:
+        1. 如果未指定 mineru_llm_name，从租户配置中查询
+        2. 获取 MinerU OCR 模型配置
+        3. 创建 LLMBundle 并获取模型实例
+        4. 调用模型的 parse_pdf 方法执行 OCR
+        5. 返回解析结果或错误信息
+    """
     pdf_parser = None
     if tenant_id:
+        # 如果未指定模型名称，尝试从租户配置中获取
         if not mineru_llm_name:
             try:
                 from api.db.services.tenant_llm_service import TenantLLMService
 
+                # 优先从环境变量获取
                 env_name = TenantLLMService.ensure_mineru_from_env(tenant_id)
+                # 其次从数据库查询租户配置的 MinerU 模型
                 candidates = TenantLLMService.query(tenant_id=tenant_id, llm_factory="MinerU", model_type=LLMType.OCR)
                 if candidates:
                     mineru_llm_name = candidates[0].llm_name
@@ -151,11 +238,16 @@ def by_mineru(
             except Exception as e:  # best-effort fallback
                 logging.warning(f"fallback to env mineru: {e}")
 
+        # 如果找到了 MinerU 模型配置，执行 OCR 解析
         if mineru_llm_name:
             try:
+                # 获取 OCR 模型配置
                 ocr_model_config = get_model_config_by_type_and_name(tenant_id, LLMType.OCR, mineru_llm_name)
+                # 创建 LLMBundle 实例
                 ocr_model = LLMBundle(tenant_id=tenant_id, model_config=ocr_model_config, lang=lang)
+                # 获取底层模型实例
                 pdf_parser = ocr_model.mdl
+                # 执行 PDF OCR 解析
                 sections, tables = pdf_parser.parse_pdf(
                     filepath=filename,
                     binary=binary,
@@ -168,20 +260,54 @@ def by_mineru(
             except Exception as e:
                 logging.error(f"Failed to parse pdf via LLMBundle MinerU ({mineru_llm_name}): {e}")
 
+    # 未找到 MinerU 模型或解析失败
     if callback:
         callback(-1, "MinerU not found.")
     return None, None, None
 
 
 def by_docling(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+    """
+    使用 Docling 解析器解析 PDF 文档
+
+    Docling 是一个基于 AI 的文档理解工具，能够智能识别文档结构、
+    表格、图片等元素，适合处理复杂布局的 PDF 文档。
+
+    Args:
+        filename: PDF 文件名或路径
+        binary: PDF 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        pdf_cls: 忽略（保留参数兼容性）
+        **kwargs: 其他参数
+            - parse_method: 解析方法（默认 "raw"）
+
+    Returns:
+        tuple: (sections, tables, pdf_parser)
+            - sections: 文本段落列表
+            - tables: 表格列表
+            - pdf_parser: DoclingParser 实例
+
+    Environment Variables:
+        - DOCLING_OUTPUT_DIR: Docling 输出目录（可选）
+        - DOCLING_DELETE_OUTPUT: 是否删除输出文件（默认 1）
+        - DOCLING_SERVER_URL: Docling 服务器 URL（可选）
+
+    Note:
+        需要先安装 Docling：pip install docling
+    """
     pdf_parser = DoclingParser()
     parse_method = kwargs.get("parse_method", "raw")
 
+    # 检查 Docling 是否已安装
     if not pdf_parser.check_installation():
         if callback:
             callback(-1, "Docling not found.")
         return None, None, pdf_parser
 
+    # 执行 PDF 解析
     sections, tables = pdf_parser.parse_pdf(
         filepath=filename,
         binary=binary,
@@ -195,12 +321,42 @@ def by_docling(filename, binary=None, from_page=0, to_page=100000, lang="Chinese
 
 
 def by_tcadp(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
+    """
+    使用腾讯云 TCADP 解析器解析文档
+
+    TCADP（Tencent Cloud Document Processing Parser）是腾讯云提供的
+    文档解析服务，支持 PDF、Excel 等多种格式的云端解析。
+
+    Args:
+        filename: 文件名或路径
+        binary: 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        pdf_cls: 忽略（保留参数兼容性）
+        **kwargs: 其他参数
+
+    Returns:
+        tuple: (sections, tables, tcadp_parser)
+            - sections: 文本段落列表
+            - tables: 表格列表
+            - tcadp_parser: TCADPParser 实例
+
+    Environment Variables:
+        - TCADP_OUTPUT_DIR: TCADP 输出目录（可选）
+
+    Note:
+        需要配置腾讯云 API 密钥和相关服务
+    """
     tcadp_parser = TCADPParser()
 
+    # 检查 TCADP 服务是否可用
     if not tcadp_parser.check_installation():
         callback(-1, "TCADP parser not available. Please check Tencent Cloud API configuration.")
         return None, None, tcadp_parser
 
+    # 执行文档解析
     sections, tables = tcadp_parser.parse_pdf(filepath=filename, binary=binary, callback=callback, output_dir=os.environ.get("TCADP_OUTPUT_DIR", ""), file_type="PDF")
     return sections, tables, tcadp_parser
 
@@ -218,13 +374,47 @@ def by_paddleocr(
     tenant_id: str | None = None,
     **kwargs,
 ):
+    """
+    使用 PaddleOCR 解析器解析 PDF 文档
+
+    PaddleOCR 是百度开源的 OCR 工具，对中文识别效果较好，
+    特别适合处理中文扫描件和图片型 PDF。
+
+    Args:
+        filename: PDF 文件名或路径
+        binary: PDF 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        pdf_cls: 忽略（保留参数兼容性）
+        parse_method: 解析方法（默认 "raw"）
+        paddleocr_llm_name: PaddleOCR 模型名称（可选，未指定时从数据库查询）
+        tenant_id: 租户 ID，用于查找模型配置
+        **kwargs: 其他参数
+
+    Returns:
+        tuple: (sections, tables, pdf_parser) 或 (None, None, None)
+            - 成功时返回解析结果
+            - 失败时返回三个 None
+
+    Processing Steps:
+        1. 如果未指定 paddleocr_llm_name，从租户配置中查询
+        2. 获取 PaddleOCR 模型配置
+        3. 创建 LLMBundle 并获取模型实例
+        4. 调用模型的 parse_pdf 方法执行 OCR
+        5. 返回解析结果或错误信息
+    """
     pdf_parser = None
     if tenant_id:
+        # 如果未指定模型名称，尝试从租户配置中获取
         if not paddleocr_llm_name:
             try:
                 from api.db.services.tenant_llm_service import TenantLLMService
 
-                env_name = TenantLLMService.ensure_paddleocr_from_env(tenant_id)
+                # 优先从环境变量获取
+                env_name = TenantLLSLLMService.ensure_paddleocr_from_env(tenant_id)
+                # 其次从数据库查询租户配置的 PaddleOCR 模型
                 candidates = TenantLLMService.query(tenant_id=tenant_id, llm_factory="PaddleOCR", model_type=LLMType.OCR)
                 if candidates:
                     paddleocr_llm_name = candidates[0].llm_name
@@ -233,11 +423,16 @@ def by_paddleocr(
             except Exception as e:  # best-effort fallback
                 logging.warning(f"fallback to env paddleocr: {e}")
 
+        # 如果找到了 PaddleOCR 模型配置，执行 OCR 解析
         if paddleocr_llm_name:
             try:
+                # 获取 OCR 模型配置
                 ocr_model_config = get_model_config_by_type_and_name(tenant_id, LLMType.OCR, paddleocr_llm_name)
+                # 创建 LLMBundle 实例
                 ocr_model = LLMBundle(tenant_id=tenant_id, model_config=ocr_model_config, lang=lang)
+                # 获取底层模型实例
                 pdf_parser = ocr_model.mdl
+                # 执行 PDF OCR 解析
                 sections, tables = pdf_parser.parse_pdf(
                     filepath=filename,
                     binary=binary,
@@ -251,38 +446,79 @@ def by_paddleocr(
 
         return None, None, None
 
+    # 未找到 PaddleOCR 模型
     if callback:
         callback(-1, "PaddleOCR not found.")
     return None, None, None
 
 
 def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
+    """
+    使用纯文本或视觉解析器解析 PDF 文档
+
+    该函数提供两种解析模式：
+    1. 纯文本模式（PlainParser）：直接提取 PDF 中的文本，速度快但无布局分析
+    2. 视觉模式（VisionParser）：使用视觉模型理解 PDF 内容，适合复杂布局
+
+    Args:
+        filename: PDF 文件名或路径
+        binary: PDF 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        callback: 进度回调函数
+        **kwargs: 其他参数
+            - layout_recognizer: 布局识别器名称（可选）
+                - 空字符串或 "Plain Text": 使用纯文本解析
+                - 其他值: 使用视觉模型解析
+            - tenant_id: 租户 ID（使用视觉模式时必需）
+            - lang: 语言设置（默认 "Chinese"）
+
+    Returns:
+        tuple: (sections, tables, pdf_parser)
+            - sections: 文本段落列表
+            - tables: 表格列表（通常为空）
+            - pdf_parser: 解析器实例（PlainParser 或 VisionParser）
+
+    Raises:
+        ValueError: 使用视觉模式但未提供 tenant_id 时
+
+    Note:
+        - 纯文本模式速度最快，适合简单文本型 PDF
+        - 视觉模式可以理解复杂布局，但需要配置视觉模型
+    """
     layout_recognizer = (kwargs.get("layout_recognizer") or "").strip()
+    # 模式1：纯文本解析（默认）
     if (not layout_recognizer) or (layout_recognizer == "Plain Text"):
         pdf_parser = PlainParser()
+    # 模式2：视觉模型解析
     else:
         tenant_id = kwargs.get("tenant_id")
         if not tenant_id:
             raise ValueError("tenant_id is required when using vision layout recognizer")
+        # 获取视觉模型配置
         vision_model_config = get_model_config_by_type_and_name(tenant_id, LLMType.IMAGE2TEXT, layout_recognizer)
         vision_model = LLMBundle(
             tenant_id,
             model_config=vision_model_config,
             lang=kwargs.get("lang", "Chinese"),
         )
+        # 创建视觉解析器
         pdf_parser = VisionParser(vision_model=vision_model, **kwargs)
 
+    # 执行 PDF 解析
     sections, tables = pdf_parser(filename if not binary else binary, from_page=from_page, to_page=to_page, callback=callback)
     return sections, tables, pdf_parser
 
 
+# PDF 解析器注册表
+# 键名为解析器标识（小写），值为对应的解析函数
 PARSERS = {
-    "deepdoc": by_deepdoc,
-    "mineru": by_mineru,
-    "docling": by_docling,
-    "tcadp parser": by_tcadp,
-    "paddleocr": by_paddleocr,
-    "plaintext": by_plaintext,  # default
+    "deepdoc": by_deepdoc,           # 默认解析器，基于 PyMuPDF
+    "mineru": by_mineru,             # MinerU OCR 解析器
+    "docling": by_docling,           # Docling AI 文档理解
+    "tcadp parser": by_tcadp,        # 腾讯云 TCADP 解析器
+    "paddleocr": by_paddleocr,       # 百度 PaddleOCR 解析器
+    "plaintext": by_plaintext,       # 纯文本解析器（默认）
 }
 
 
@@ -305,36 +541,70 @@ class Docx(DocxParser):
         pass
 
     def __clean(self, line):
+        """
+        清理文本行
+
+        将全角空格（\u3000）替换为半角空格，并去除首尾空白。
+
+        Args:
+            line: 待清理的文本行
+
+        Returns:
+            str: 清理后的文本行
+        """
         line = re.sub(r"\u3000", " ", line).strip()
         return line
 
     def __get_nearest_title(self, table_index, filename):
-        """Get the hierarchical title structure before the table"""
+        """
+        获取表格之前的层级标题结构
+
+        该函数用于找到表格所在位置的标题层级，生成类似
+        "文档名 > 一级标题 > 二级标题" 的层级路径。
+
+        Args:
+            table_index: 目标表格的索引（从 0 开始）
+            filename: 文档文件名，用于生成文档名
+
+        Returns:
+            str: 标题层级路径，如 "用户手册 > 第一章 > 1.1 节"
+                 如果未找到标题则返回空字符串
+
+        Processing Steps:
+            1. 收集文档中的所有段落和表格，保持文档顺序
+            2. 定位目标表格的位置
+            3. 从表格位置向前搜索最近的标题
+            4. 递归查找父级标题，构建完整的标题层级
+            5. 格式化为 "文档名 > 标题1 > 标题2" 的形式
+
+        Note:
+            - 支持最多 7 级标题（Heading 1-7）
+            - 标题样式名称需包含 "Heading" 关键字
+        """
         import re
         from docx.text.paragraph import Paragraph
 
         titles = []
         blocks = []
 
-        # Get document name from filename parameter
+        # 从文件名提取文档名（去除扩展名）
         doc_name = re.sub(r"\.[a-zA-Z]+$", "", filename)
         if not doc_name:
             doc_name = "Untitled Document"
 
-        # Collect all document blocks while maintaining document order
+        # 步骤1：收集文档中的所有块（段落和表格），保持文档顺序
         try:
-            # Iterate through all paragraphs and tables in document order
             for i, block in enumerate(self.doc._element.body):
-                if block.tag.endswith("p"):  # Paragraph
+                if block.tag.endswith("p"):  # 段落
                     p = Paragraph(block, self.doc)
                     blocks.append(("p", i, p))
-                elif block.tag.endswith("tbl"):  # Table
-                    blocks.append(("t", i, None))  # Table object will be retrieved later
+                elif block.tag.endswith("tbl"):  # 表格
+                    blocks.append(("t", i, None))  # 表格对象稍后获取
         except Exception as e:
             logging.error(f"Error collecting blocks: {e}")
             return ""
 
-        # Find the target table position
+        # 步骤2：定位目标表格的位置
         target_table_pos = -1
         table_count = 0
         for i, (block_type, pos, _) in enumerate(blocks):
@@ -345,42 +615,44 @@ class Docx(DocxParser):
                 table_count += 1
 
         if target_table_pos == -1:
-            return ""  # Target table not found
+            return ""  # 未找到目标表格
 
-        # Find the nearest heading paragraph in reverse order
+        # 步骤3：从表格位置向前搜索最近的标题段落
         nearest_title = None
         for i in range(len(blocks) - 1, -1, -1):
             block_type, pos, block = blocks[i]
-            if pos >= target_table_pos:  # Skip blocks after the table
+            if pos >= target_table_pos:  # 跳过表格之后的块
                 continue
 
             if block_type != "p":
                 continue
 
+            # 检查是否为标题样式
             if block.style and block.style.name and re.search(r"Heading\s*(\d+)", block.style.name, re.I):
                 try:
                     level_match = re.search(r"(\d+)", block.style.name)
                     if level_match:
                         level = int(level_match.group(1))
-                        if level <= 7:  # Support up to 7 heading levels
+                        if level <= 7:  # 支持最多 7 级标题
                             title_text = block.text.strip()
-                            if title_text:  # Avoid empty titles
+                            if title_text:  # 避免空标题
                                 nearest_title = (level, title_text)
                                 break
                 except Exception as e:
                     logging.error(f"Error parsing heading level: {e}")
 
+        # 步骤4：如果找到了最近的标题，递归查找所有父级标题
         if nearest_title:
-            # Add current title
+            # 添加当前标题
             titles.append(nearest_title)
             current_level = nearest_title[0]
 
-            # Find all parent headings, allowing cross-level search
+            # 查找所有父级标题，允许跨级搜索
             while current_level > 1:
                 found = False
                 for i in range(len(blocks) - 1, -1, -1):
                     block_type, pos, block = blocks[i]
-                    if pos >= target_table_pos:  # Skip blocks after the table
+                    if pos >= target_table_pos:  # 跳过表格之后的块
                         continue
 
                     if block_type != "p":
@@ -391,10 +663,10 @@ class Docx(DocxParser):
                             level_match = re.search(r"(\d+)", block.style.name)
                             if level_match:
                                 level = int(level_match.group(1))
-                                # Find any heading with a higher level
+                                # 查找更高层级的标题
                                 if level < current_level:
                                     title_text = block.text.strip()
-                                    if title_text:  # Avoid empty titles
+                                    if title_text:  # 避免空标题
                                         titles.append((level, title_text))
                                         current_level = level
                                         found = True
@@ -402,53 +674,104 @@ class Docx(DocxParser):
                         except Exception as e:
                             logging.error(f"Error parsing parent heading: {e}")
 
-                if not found:  # Break if no parent heading is found
+                if not found:  # 如果没有找到父级标题，退出循环
                     break
 
-            # Sort by level (ascending, from highest to lowest)
+            # 步骤5：按层级排序（从高到低）
             titles.sort(key=lambda x: x[0])
-            # Organize titles (from highest to lowest)
+            # 组织层级结构（从最高级到最低级）
             hierarchy = [doc_name] + [t[1] for t in titles]
             return " > ".join(hierarchy)
 
         return ""
 
     def __call__(self, filename, binary=None, from_page=0, to_page=100000):
+        """
+        解析 DOCX 文档
+
+        该方法是 DOCX 解析的核心入口，遍历文档的所有元素（段落、表格、图片），
+        并将其转换为统一的格式返回。
+
+        Args:
+            filename: DOCX 文件名或路径
+            binary: DOCX 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+
+        Returns:
+            list: 元素列表，每个元素为三元组 (text, image, table)
+                - text: 段落文本（图片和表格时为空字符串）
+                - image: 图片对象（段落和表格时为 None）
+                - table: HTML 格式的表格字符串（非表格时为 None）
+
+        Processing Steps:
+            1. 加载 DOCX 文档
+            2. 遍历文档的所有块（段落和表格）
+            3. 处理段落：
+               - 提取文本内容
+               - 识别标题、说明文字等样式
+               - 提取嵌入的图片
+               - 追踪页码变化
+            4. 处理表格：
+               - 转换为 HTML 格式
+               - 添加标题层级信息作为 caption
+               - 处理合并单元格
+            5. 返回所有元素的列表
+
+        Note:
+            - 页码追踪通过 lastRenderedPageBreak 和 w:br 标签实现
+            - 图片可能与文本或标题关联
+            - 表格会记录其所在的标题层级
+        """
+        # 加载 DOCX 文档
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
-        pn = 0
-        lines = []
-        last_image = None
-        table_idx = 0
+        pn = 0  # 当前页码
+        lines = []  # 存储所有元素
+        last_image = None  # 临时存储未关联的图片
+        table_idx = 0  # 表格计数器
 
         def flush_last_image():
+            """
+            将未关联的图片输出为独立元素
+
+            当遇到无法与文本关联的图片时，将其作为独立的图片元素添加到结果中。
+            """
             nonlocal last_image, lines
             if last_image is not None:
                 lines.append({"text": "", "image": last_image, "table": None, "style": "Image"})
                 last_image = None
 
+        # 遍历文档中的所有块（段落和表格）
         for block in self.doc._element.body:
+            # 检查页码范围
             if pn > to_page:
                 break
 
+            # 处理段落
             if block.tag.endswith("p"):
                 p = Paragraph(block, self.doc)
 
+                # 只处理指定页码范围内的内容
                 if from_page <= pn < to_page:
                     text = p.text.strip()
                     style_name = p.style.name if p.style else ""
 
                     if text:
+                        # 处理说明文字（Caption 样式）
                         if style_name == "Caption":
                             former_image = None
 
+                            # 尝试与上一行的图片关联
                             if lines and lines[-1].get("image") and lines[-1].get("style") != "Caption":
                                 former_image = lines[-1].get("image")
                                 lines.pop()
 
+                            # 或者与临时存储的图片关联
                             elif last_image is not None:
                                 former_image = last_image
                                 last_image = None
 
+                            # 添加说明文字元素
                             lines.append(
                                 {
                                     "text": self.__clean(text),
@@ -457,8 +780,11 @@ class Docx(DocxParser):
                                 }
                             )
 
+                        # 处理普通段落
                         else:
+                            # 先输出未关联的图片
                             flush_last_image()
+                            # 添加文本元素
                             lines.append(
                                 {
                                     "text": self.__clean(text),
@@ -467,6 +793,7 @@ class Docx(DocxParser):
                                 }
                             )
 
+                            # 检查段落中是否包含图片
                             current_image = self.get_picture(self.doc, p)
                             if current_image is not None:
                                 lines.append(
@@ -478,10 +805,12 @@ class Docx(DocxParser):
                                 )
 
                     else:
+                        # 空段落，检查是否包含图片
                         current_image = self.get_picture(self.doc, p)
                         if current_image is not None:
                             last_image = current_image
 
+                # 通过 run 中的标签追踪页码变化
                 for run in p.runs:
                     xml = run._element.xml
                     if "lastRenderedPageBreak" in xml:
@@ -490,17 +819,25 @@ class Docx(DocxParser):
                     if "w:br" in xml and 'type="page"' in xml:
                         pn += 1
 
+            # 处理表格
             elif block.tag.endswith("tbl"):
+                # 检查页码范围
                 if pn < from_page or pn > to_page:
                     table_idx += 1
                     continue
 
+                # 先输出未关联的图片
                 flush_last_image()
+
+                # 解析表格
                 tb = DocxTable(block, self.doc)
+                # 获取表格所在的标题层级
                 title = self.__get_nearest_title(table_idx, filename)
                 html = "<table>"
                 if title:
                     html += f"<caption>Table Location: {title}</caption>"
+
+                # 转换表格行为 HTML
                 for r in tb.rows:
                     html += "<tr>"
                     col_idx = 0
@@ -508,6 +845,7 @@ class Docx(DocxParser):
                         while col_idx < len(r.cells):
                             span = 1
                             c = r.cells[col_idx]
+                            # 检测合并单元格
                             for j in range(col_idx + 1, len(r.cells)):
                                 if c.text == r.cells[j].text:
                                     span += 1
@@ -520,10 +858,15 @@ class Docx(DocxParser):
                         logging.warning(f"Error parsing table, ignore: {e}")
                     html += "</tr>"
                 html += "</table>"
+
+                # 添加表格元素
                 lines.append({"text": "", "image": None, "table": html})
                 table_idx += 1
 
+        # 输出剩余的未关联图片
         flush_last_image()
+
+        # 转换为三元组格式
         new_line = [(line.get("text"), line.get("image"), line.get("table")) for line in lines]
 
         return new_line
@@ -590,36 +933,77 @@ class Pdf(PdfParser):
         super().__init__()
 
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None, separate_tables_figures=False):
+        """
+        解析 PDF 文档
+
+        该方法是 PDF 解析的核心入口，执行完整的 PDF 解析流程：
+        OCR → 布局分析 → 表格识别 → 文本合并
+
+        Args:
+            filename: PDF 文件名或路径
+            binary: PDF 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+            zoomin: 图片放大倍数（默认 3，提高 OCR 精度）
+            callback: 进度回调函数
+            separate_tables_figures: 是否分别提取表格和图片（默认 False）
+
+        Returns:
+            tuple: (sections, tables) 或 (sections, tables, figures)
+                - sections: 文本段落列表，每个元素为 (text, tag) 元组
+                - tables: 表格列表
+                - figures: 图片列表（仅当 separate_tables_figures=True 时）
+
+        Processing Steps:
+            1. OCR 文字识别：将 PDF 页面转换为图片并识别文字
+            2. 布局分析：识别文本框、图片、表格的位置和边界
+            3. 表格分析：检测和识别表格结构
+            4. 文本合并：将相邻的文本框合并为段落
+            5. 垂直合并：将垂直相邻的文本块合并
+            6. 向下连接：处理跨页的连续文本
+
+        Note:
+            - 整个过程可能需要较长时间，callback 用于报告进度
+            - zoomin 参数影响 OCR 精度和处理速度
+            - separate_tables_figures 控制是否单独提取图片
+        """
         start = timer()
         first_start = start
         callback(msg="OCR started")
+        # 步骤1：OCR 文字识别
         self.__images__(filename if not binary else binary, zoomin, from_page, to_page, callback)
         callback(msg="OCR finished ({:.2f}s)".format(timer() - start))
         logging.info("OCR({}~{}): {:.2f}s".format(from_page, to_page, timer() - start))
 
         start = timer()
+        # 步骤2：布局分析
         self._layouts_rec(zoomin)
         callback(0.63, "Layout analysis ({:.2f}s)".format(timer() - start))
 
         start = timer()
+        # 步骤3：表格分析
         self._table_transformer_job(zoomin)
         callback(0.65, "Table analysis ({:.2f}s)".format(timer() - start))
 
         start = timer()
+        # 步骤4：文本合并
         self._text_merge(zoomin=zoomin)
         callback(0.67, "Text merged ({:.2f}s)".format(timer() - start))
 
+        # 步骤5：根据参数选择提取模式
         if separate_tables_figures:
+            # 分别提取表格和图片
             tbls, figures = self._extract_table_figure(True, zoomin, True, True, True)
             self._concat_downward()
             logging.info("layouts cost: {}s".format(timer() - first_start))
             return [(b["text"], self._line_tag(b, zoomin)) for b in self.boxes], tbls, figures
         else:
+            # 只提取表格
             tbls = self._extract_table_figure(True, zoomin, True, True)
             self._naive_vertical_merge()
             self._concat_downward()
-            # self._final_reading_order_merge()
-            # self._filter_forpages()
+            # self._final_reading_order_merge()  # 可选：最终阅读顺序合并
+            # self._filter_forpages()  # 可选：过滤页面
             logging.info("layouts cost: {}s".format(timer() - first_start))
             return [(b["text"], self._line_tag(b, zoomin)) for b in self.boxes], tbls
 
@@ -639,6 +1023,19 @@ class Markdown(MarkdownParser):
     """
 
     def md_to_html(self, sections):
+        """
+        将 Markdown 文本转换为 HTML BeautifulSoup 对象
+
+        Args:
+            sections: Markdown 文本，可以是字符串或字符串列表
+
+        Returns:
+            BeautifulSoup: HTML 解析对象，失败时返回空列表
+
+        Note:
+            - 只处理第一个元素（如果是列表）
+            - 使用 markdown 库进行转换
+        """
         if not sections:
             return []
         if isinstance(sections, type("")):
@@ -655,16 +1052,48 @@ class Markdown(MarkdownParser):
         return soup
 
     def get_hyperlink_urls(self, soup):
+        """
+        从 HTML 中提取所有超链接 URL
+
+        Args:
+            soup: BeautifulSoup HTML 对象
+
+        Returns:
+            set: URL 集合，如果 soup 为空则返回空集合
+        """
         if soup:
             return set([a.get("href") for a in soup.find_all("a") if a.get("href")])
         return []
 
     def extract_image_urls_with_lines(self, text):
+        """
+        从 Markdown 文本中提取图片 URL 及其所在行号
+
+        该函数支持两种格式的图片引用：
+        1. Markdown 格式：![alt](url)
+        2. HTML 格式：<img src="url">
+
+        Args:
+            text: Markdown 文本内容
+
+        Returns:
+            list: 图片信息列表，每个元素为 {"url": str, "line": int}
+                - url: 图片 URL
+                - line: 所在行号（从 0 开始）
+
+        Processing Steps:
+            1. 使用正则表达式逐行匹配 Markdown 和 HTML 图片格式
+            2. 使用 BeautifulSoup 解析 HTML，查找跨行的图片标签
+            3. 根据位置计算图片所在的行号
+            4. 去重，避免重复提取
+        """
         md_img_re = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
         html_img_re = re.compile(r'src=["\\\']([^"\\\'>\\s]+)', re.IGNORECASE)
         urls = []
         seen = set()
         lines = text.splitlines()
+
+        # 步骤1：逐行匹配图片 URL
         for idx, line in enumerate(lines):
             for url in md_img_re.findall(line):
                 if (url, idx) not in seen:
@@ -675,7 +1104,7 @@ class Markdown(MarkdownParser):
                     urls.append({"url": url, "line": idx})
                     seen.add((url, idx))
 
-        # cross-line
+        # 步骤2：处理跨行的图片标签（HTML 格式）
         try:
             from bs4 import BeautifulSoup
 
@@ -689,13 +1118,16 @@ class Markdown(MarkdownParser):
                 tag_str = str(img_tag)
                 pos = text.find(tag_str)
                 if pos == -1:
-                    # fallback
+                    # fallback: 直接查找 URL
                     pos = max(text.find(src), 0)
+
+                # 根据位置计算行号
                 line_no = 0
                 for i, off in enumerate(newline_offsets):
                     if pos <= off:
                         line_no = i
                         break
+
                 if (src, line_no) not in seen:
                     urls.append({"url": src, "line": line_no})
                     seen.add((src, line_no))
@@ -706,36 +1138,103 @@ class Markdown(MarkdownParser):
         return urls
 
     def load_images_from_urls(self, urls, cache=None):
+        """
+        从 URL 加载图片
+
+        支持本地文件路径和 HTTP/HTTPS URL。
+        使用缓存避免重复加载相同的图片。
+
+        Args:
+            urls: URL 列表或包含 "url" 键的字典列表
+            cache: 图片缓存字典（可选）
+
+        Returns:
+            tuple: (images, cache)
+                - images: PIL Image 对象列表
+                - cache: 更新后的缓存字典
+
+        Note:
+            - HTTP 请求超时时间为 30 秒
+            - 图片会被转换为 RGB 格式
+            - 加载失败的图片在缓存中值为 None
+        """
         import requests
         from pathlib import Path
 
         cache = cache or {}
         images = []
+
         for url in urls:
-            if url in cache:
-                if cache[url]:
-                    images.append(cache[url])
+            # 从字典或字符串中提取 URL
+            url_str = url if isinstance(url, str) else url.get("url")
+
+            if url_str in cache:
+                if cache[url_str]:
+                    images.append(cache[url_str])
                 continue
+
             img_obj = None
             try:
-                if url.startswith(("http://", "https://")):
-                    response = requests.get(url, stream=True, timeout=30)
+                # 处理网络图片
+                if url_str.startswith(("http://", "https://")):
+                    response = requests.get(url_str, stream=True, timeout=30)
                     if response.status_code == 200 and response.headers.get("Content-Type", "").startswith("image/"):
                         img_obj = Image.open(BytesIO(response.content)).convert("RGB")
+                # 处理本地图片
                 else:
-                    local_path = Path(url)
+                    local_path = Path(url_str)
                     if local_path.exists():
-                        img_obj = Image.open(url).convert("RGB")
+                        img_obj = Image.open(url_str).convert("RGB")
                     else:
-                        logging.warning(f"Local image file not found: {url}")
+                        logging.warning(f"Local image file not found: {url_str}")
             except Exception as e:
-                logging.error(f"Failed to download/open image from {url}: {e}")
-            cache[url] = img_obj
+                logging.error(f"Failed to download/open image from {url_str}: {e}")
+
+            cache[url_str] = img_obj
             if img_obj:
                 images.append(img_obj)
+
         return images, cache
 
     def __call__(self, filename, binary=None, separate_tables=True, delimiter=None, return_section_images=False):
+        """
+        解析 Markdown 文档
+
+        该方法是 Markdown 解析的核心入口，提取文本、表格和图片。
+
+        Args:
+            filename: Markdown 文件名或路径
+            binary: Markdown 文件的二进制内容（可选）
+            separate_tables: 是否分离表格（默认 True）
+            delimiter: 自定义分隔符（可选）
+            return_section_images: 是否返回每个段落关联的图片（默认 False）
+
+        Returns:
+            tuple:
+                如果 return_section_images=True:
+                    (sections, tbls, section_images)
+                否则:
+                    (sections, tbls)
+                    - sections: 段落列表，每个元素为 (text, "") 元组
+                    - tbls: 表格列表
+                    - section_images: 每个段落关联的图片列表
+
+        Processing Steps:
+            1. 读取并解码 Markdown 文本
+            2. 提取表格和剩余文本
+            3. 提取图片 URL 和所在行号
+            4. 按分隔符分段（使用 MarkdownElementExtractor）
+            5. 为每个段落加载关联的图片
+            6. 合并同一段落的多个图片
+            7. 转换表格为 HTML 格式
+            8. 返回解析结果
+
+        Note:
+            - 使用 find_codec 自动检测文件编码
+            - 图片会使用 reduce(concat_img, ...) 合并
+            - 表格使用 markdown.extensions.tables 扩展
+        """
+        # 步骤1：读取文件内容
         if binary:
             encoding = find_codec(binary)
             txt = binary.decode(encoding, errors="ignore")
@@ -743,33 +1242,49 @@ class Markdown(MarkdownParser):
             with open(filename, "r") as f:
                 txt = f.read()
 
+        # 步骤2：提取表格和剩余文本
         remainder, tables = self.extract_tables_and_remainder(f"{txt}\n", separate_tables=separate_tables)
-        # To eliminate duplicate tables in chunking result, uncomment code below and set separate_tables to True in line 410.
-        # extractor = MarkdownElementExtractor(remainder)
+
+        # 步骤3：提取图片引用
+        # 注意：使用完整文本而非 remainder，以获取所有图片
         extractor = MarkdownElementExtractor(txt)
         image_refs = self.extract_image_urls_with_lines(txt)
+
+        # 步骤4：按分隔符分段
         element_sections = extractor.extract_elements(delimiter, include_meta=True)
 
+        # 步骤5-6：为每个段落加载并合并图片
         sections = []
         section_images = []
         image_cache = {}
+
         for element in element_sections:
             content = element["content"]
             start_line = element["start_line"]
             end_line = element["end_line"]
+
+            # 查找该段落范围内的所有图片
             urls_in_section = [ref["url"] for ref in image_refs if start_line <= ref["line"] <= end_line]
+
+            # 加载图片
             imgs = []
             if urls_in_section:
                 imgs, image_cache = self.load_images_from_urls(urls_in_section, image_cache)
+
+            # 合并多个图片
             combined_image = None
             if imgs:
                 combined_image = reduce(concat_img, imgs) if len(imgs) > 1 else imgs[0]
+
             sections.append((content, ""))
             section_images.append(combined_image)
 
+        # 步骤7：转换表格为 HTML
         tbls = []
         for table in tables:
             tbls.append(((None, markdown(table, extensions=["markdown.extensions.tables"])), ""))
+
+        # 步骤8：返回结果
         if return_section_images:
             return sections, tbls, section_images
         return sections, tbls
@@ -777,16 +1292,42 @@ class Markdown(MarkdownParser):
 
 def load_from_xml_v2(baseURI, rels_item_xml):
     """
-    Return |_SerializedRelationships| instance loaded with the
-    relationships contained in *rels_item_xml*. Returns an empty
-    collection if *rels_item_xml* is |None|.
+    从 XML 加载 DOCX 关系列表（修复版本）
+
+    该函数是 python-docx 库的修复版本，用于处理 DOCX 文件中的关系引用。
+    修复了原始版本在处理某些 DOCX 文件时出现的 "word/NULL" 错误。
+
+    Args:
+        baseURI: 基础 URI，用于解析相对路径
+        rels_item_xml: 关系 XML 内容，描述文档中的各种关系（超链接、图片等）
+
+    Returns:
+        _SerializedRelationships: 关系列表对象，如果 rels_item_xml 为 None 则返回空集合
+
+    Processing Steps:
+        1. 创建空的关系列表对象
+        2. 如果提供了 XML 内容，解析 XML
+        3. 遍历所有关系元素
+        4. 过滤掉无效的关系（NULL 引用、内部引用等）
+        5. 将有效关系添加到列表中
+
+    Filtered Relationships:
+        - "../NULL": 无效的 NULL 引用
+        - "NULL": 无效的 NULL 引用
+        - "#": 内部引用（如书签）
+
+    Note:
+        该函数用于替换 _SerializedRelationships.load_from_xml，
+        修复参考：https://github.com/python-openxml/python-docx/issues/1105#issuecomment-1298075246
     """
     srels = _SerializedRelationships()
     if rels_item_xml is not None:
         rels_elm = parse_xml(rels_item_xml)
         for rel_elm in rels_elm.Relationship_lst:
+            # 过滤掉无效的关系引用
             if rel_elm.target_ref in ("../NULL", "NULL") or rel_elm.target_ref.startswith("#"):
                 continue
+            # 添加有效关系到列表
             srels._srels.append(_SerializedRelationship(baseURI, rel_elm))
     return srels
 
@@ -827,43 +1368,68 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         - 支持嵌套文件（如嵌入的文档）
         - 支持超链接提取和递归解析
     """
-    urls = set()
-    url_res = []
+    # ========== 初始化变量 ==========
+    urls = set()  # 提取的超链接 URL 集合
+    url_res = []  # 超链接解析结果列表
 
-    is_english = lang.lower() == "english"  # is_english(cks)
-    parser_config = kwargs.get("parser_config", {"chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC", "analyze_hyperlink": True})
+    # ========== 步骤1：初始化配置参数 ==========
+    # 判断是否为英文（影响分词策略）
+    is_english = lang.lower() == "english"
 
+    # 获取解析器配置，提供默认值
+    parser_config = kwargs.get("parser_config", {
+        "chunk_token_num": 512,           # 块的最大 token 数
+        "delimiter": "\n!?。；！？",      # 分句分隔符
+        "layout_recognize": "DeepDOC",    # 布局识别器
+        "analyze_hyperlink": True        # 是否分析超链接
+    })
+
+    # ========== 步骤2：处理子元素分隔符 ==========
+    # 子元素分隔符用于处理嵌套内容（如代码块、表格等）
+    # 处理转义字符和自定义分隔符（反引号包裹）
     child_deli = (parser_config.get("children_delimiter") or "").encode("utf-8").decode("unicode_escape").encode("latin1").decode("utf-8")
-    cust_child_deli = re.findall(r"`([^`]+)`", child_deli)
-    child_deli = "|".join(re.sub(r"`([^`]+)`", "", child_deli))
+    cust_child_deli = re.findall(r"`([^`]+)`", child_deli)  # 提取反引号中的自定义分隔符
+    child_deli = "|".join(re.sub(r"`([^`]+)`", "", child_deli))  # 移除反引号标记
     if cust_child_deli:
-        cust_child_deli = sorted(set(cust_child_deli), key=lambda x: -len(x))
-        cust_child_deli = "|".join(re.escape(t) for t in cust_child_deli if t)
-        child_deli += cust_child_deli
+        cust_child_deli = sorted(set(cust_child_deli), key=lambda x: -len(x))  # 按长度降序排序
+        cust_child_deli = "|".join(re.escape(t) for t in cust_child_deli if t)  # 转义特殊字符
+        child_deli += cust_child_deli  # 合并自定义分隔符
 
-    is_markdown = False
+    # ========== 步骤3：获取上下文配置 ==========
+    is_markdown = False  # 标记是否为 Markdown 文件
+    # 表格上下文大小：表格前后保留的文本行数
     table_context_size = max(0, int(parser_config.get("table_context_size", 0) or 0))
+    # 图片上下文大小：图片描述保留的文本行数
     image_context_size = max(0, int(parser_config.get("image_context_size", 0) or 0))
 
-    doc = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
-    doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])
-    res = []
-    pdf_parser = None
-    section_images = None
+    # ========== 步骤4：初始化文档元数据 ==========
+    # 创建文档基础信息
+    doc = {
+        "docnm_kwd": filename,  # 文档名称
+        "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))  # 标题分词
+    }
+    doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])  # 标题细粒度分词
 
-    is_root = kwargs.get("is_root", True)
-    embed_res = []
+    res = []  # 最终结果列表
+    pdf_parser = None  # PDF 解析器实例
+    section_images = None  # 段落关联的图片
+
+    # ========== 步骤5：提取嵌入文件 ==========
+    is_root = kwargs.get("is_root", True)  # 是否为根调用（非递归）
+    embed_res = []  # 嵌入文件的解析结果
+
     if is_root:
-        # Only extract embedded files at the root call
+        # 只在根调用时提取嵌入文件（避免递归时重复提取）
         embeds = []
         if binary is not None:
-            embeds = extract_embed_file(binary)
+            embeds = extract_embed_file(binary)  # 从二进制数据中提取嵌入文件
         else:
             raise Exception("Embedding extraction from file path is not supported.")
 
-        # Recursively chunk each embedded file and collect results
+        # 递归解析每个嵌入文件
         for embed_filename, embed_bytes in embeds:
             try:
+                # 递归调用 chunk 函数解析嵌入文件
                 sub_res = chunk(embed_filename, binary=embed_bytes, lang=lang, callback=callback, is_root=False, **kwargs) or []
                 embed_res.extend(sub_res)
             except Exception as e:
@@ -873,56 +1439,88 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
                     callback(0.05, error_msg)
                 continue
 
+    # ========== 文件类型路由：根据文件扩展名选择解析策略 ==========
+
+    # ------------------ DOCX 文档处理 ------------------
     if re.search(r"\.docx$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
+
+        # 步骤1：超链接分析（可选）
         if parser_config.get("analyze_hyperlink", False) and is_root:
-            urls = extract_links_from_docx(binary)
+            urls = extract_links_from_docx(binary)  # 提取文档中的所有超链接
+            # 递归解析超链接指向的网页
             for index, url in enumerate(urls):
                 html_bytes, metadata = extract_html(url)
                 if not html_bytes:
                     continue
                 try:
+                    # 尝试按原始 URL 解析
                     sub_url_res = chunk(url, html_bytes, callback=callback, lang=lang, is_root=False, **kwargs)
                 except Exception as e:
                     logging.info(f"Failed to chunk url in registered file type {url}: {e}")
+                    # 失败时按 HTML 格式解析
                     sub_url_res = chunk(f"{index}.html", html_bytes, callback=callback, lang=lang, is_root=False, **kwargs)
                 url_res.extend(sub_url_res)
 
-        # fix "There is no item named 'word/NULL' in the archive", referring to https://github.com/python-openxml/python-docx/issues/1105#issuecomment-1298075246
+        # 步骤2：修复 python-docx 的已知问题
+        # fix "There is no item named 'word/NULL' in the archive"
+        # 参考：https://github.com/python-openxml/python-docx/issues/1105#issuecomment-1298075246
         _SerializedRelationships.load_from_xml = load_from_xml_v2
 
-        # sections = (text, image, tables)
+        # 步骤3：解析 DOCX 结构
+        # sections 格式：[(text, image, table), ...]
         sections = Docx()(filename, binary)
+        # 规范化 RTL（从右到左）文本
         sections = _normalize_section_text_for_rtl_presentation_forms(sections)
 
-        # chunks list[dict]
-        # images list - index of image chunk in chunks
-        chunks, images = naive_merge_docx(sections, int(parser_config.get("chunk_token_num", 128)), parser_config.get("delimiter", "\n!?。；！？"), table_context_size, image_context_size)
+        # 步骤4：文本分块（DOCX 专用）
+        # chunks: 分块列表（每个元素为字典）
+        # images: 包含图片的 chunk 索引列表
+        chunks, images = naive_merge_docx(
+            sections,
+            int(parser_config.get("chunk_token_num", 128)),
+            parser_config.get("delimiter", "\n!?。；！？"),
+            table_context_size,
+            image_context_size
+        )
 
+        # 步骤5：视觉增强（使用视觉模型理解图片）
         vision_figure_parser_docx_wrapper_naive(chunks=chunks, idx_lst=images, callback=callback, **kwargs)
 
         callback(0.8, "Finish parsing.")
         st = timer()
 
+        # 步骤6：分词包装
         res.extend(doc_tokenize_chunks_with_images(chunks, doc, is_english, child_delimiters_pattern=child_deli))
         logging.info("naive_merge({}): {}".format(filename, timer() - st))
+
+        # 合并结果
         res.extend(embed_res)
         res.extend(url_res)
         return res
 
+    # ------------------ PDF 文档处理 ------------------
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
+        # 步骤1：解析器配置
+        # 规范化布局识别器名称和模型名称
+        layout_recognizer, parser_model_name = normalize_layout_recognizer(
+            parser_config.get("layout_recognize", "DeepDOC")
+        )
 
+        # 步骤2：超链接提取（可选）
         if parser_config.get("analyze_hyperlink", False) and is_root:
-            urls = extract_links_from_pdf(binary)
+            urls = extract_links_from_pdf(binary)  # 提取 PDF 中的超链接
 
+        # 步骤3：确定解析器
         if isinstance(layout_recognizer, bool):
             layout_recognizer = "DeepDOC" if layout_recognizer else "PlainText"
 
+        # 从 PARSERS 字典中选择解析器（小写键名）
         name = layout_recognizer.strip().lower()
-        parser = PARSERS.get(name, by_plaintext)
+        parser = PARSERS.get(name, by_plaintext)  # 默认使用纯文本解析器
         callback(0.1, "Start to parse.")
 
+        # 步骤4：调用解析器
         sections, tables, pdf_parser = parser(
             filename=filename,
             binary=binary,
@@ -935,75 +1533,111 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             paddleocr_llm_name=parser_model_name,
             **kwargs,
         )
+        # 规范化 RTL 文本
         sections = _normalize_section_text_for_rtl_presentation_forms(sections)
 
+        # 步骤5：检查解析结果
         if not sections and not tables:
             return []
 
+        # 步骤6：表格和图片上下文增强
         if table_context_size or image_context_size:
             tables = append_context2table_image4pdf(sections, tables, image_context_size)
 
+        # 步骤7：特殊解析器处理
+        # 某些解析器（tcadp、docling、mineru、paddleocr）已内置分块逻辑
         if name in ["tcadp", "docling", "mineru", "paddleocr"]:
             if int(parser_config.get("chunk_token_num", 0)) <= 0:
                 parser_config["chunk_token_num"] = 0
 
+        # 步骤8：表格分词
         res = tokenize_table(tables, doc, is_english)
         callback(0.8, "Finish parsing.")
 
+    # ------------------ Excel/CSV 表格处理 ------------------
     elif re.search(r"\.(csv|xlsx?)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
 
-        # Check if tcadp_parser is selected for spreadsheet files
-        layout_recognizer = parser_config.get("layout_recognize", "DeepDOC")
+        # 步骤1：检查是否使用 TCADP Parser（腾讯云解析器）
+        layout_recognizer = parser_config.get("layout_recognizer", "DeepDOC")
         if layout_recognizer == "TCADP Parser":
-            table_result_type = parser_config.get("table_result_type", "1")
-            markdown_image_response_type = parser_config.get("markdown_image_response_type", "1")
+            # 使用腾讯云 TCADP 解析器
+            table_result_type = parser_config.get("table_result_type", "1")  # 表格输出格式
+            markdown_image_response_type = parser_config.get("markdown_image_response_type", "1")  # 图片响应类型
             tcadp_parser = TCADPParser(table_result_type=table_result_type, markdown_image_response_type=markdown_image_response_type)
+
             if not tcadp_parser.check_installation():
                 callback(-1, "TCADP parser not available. Please check Tencent Cloud API configuration.")
                 return res
 
-            # Determine file type based on extension
+            # 确定文件类型
             file_type = "XLSX" if re.search(r"\.xlsx?$", filename, re.IGNORECASE) else "CSV"
 
-            sections, tables = tcadp_parser.parse_pdf(filepath=filename, binary=binary, callback=callback, output_dir=os.environ.get("TCADP_OUTPUT_DIR", ""), file_type=file_type)
+            # 调用 TCADP 解析器
+            sections, tables = tcadp_parser.parse_pdf(
+                filepath=filename,
+                binary=binary,
+                callback=callback,
+                output_dir=os.environ.get("TCADP_OUTPUT_DIR", ""),
+                file_type=file_type
+            )
             sections = _normalize_section_text_for_rtl_presentation_forms(sections)
-            parser_config["chunk_token_num"] = 0
+            parser_config["chunk_token_num"] = 0  # 禁用后续分块（表格已是独立行）
             res = tokenize_table(tables, doc, is_english)
             callback(0.8, "Finish parsing.")
         else:
-            # Default DeepDOC parser
+            # 使用默认的 DeepDOC 解析器
             excel_parser = ExcelParser()
+
             if parser_config.get("html4excel"):
+                # 输出 HTML 格式（每 12 行一组）
                 sections = [(_, "") for _ in excel_parser.html(binary, 12) if _]
-                parser_config["chunk_token_num"] = 0
+                parser_config["chunk_token_num"] = 0  # 禁用后续分块
             else:
+                # 输出纯文本格式（每行独立）
                 sections = [(_, "") for _ in excel_parser(binary) if _]
+
             sections = _normalize_section_text_for_rtl_presentation_forms(sections)
 
+    # ------------------ TXT 纯文本/代码文件处理 ------------------
     elif re.search(r"\.(txt|py|js|java|c|cpp|h|php|go|ts|sh|cs|kt|sql)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
-        sections = TxtParser()(filename, binary, parser_config.get("chunk_token_num", 128), parser_config.get("delimiter", "\n!?;。；！？"))
+
+        # 使用纯文本解析器
+        sections = TxtParser()(
+            filename,
+            binary,
+            parser_config.get("chunk_token_num", 128),
+            parser_config.get("delimiter", "\n!?;。；！？")
+        )
         sections = _normalize_section_text_for_rtl_presentation_forms(sections)
+
+        # 调试输出（开发模式）
         print("\n", "-"*150, "\n")
         print(sections)
         print("\n", "-"*150, "\n")
+
         callback(0.8, "Finish parsing.")
 
+    # ------------------ Markdown 文档处理 ------------------
     elif re.search(r"\.(md|markdown|mdx)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
+
+        # 步骤1：解析 Markdown 结构
         markdown_parser = Markdown(int(parser_config.get("chunk_token_num", 128)))
         sections, tables, section_images = markdown_parser(
             filename,
             binary,
-            separate_tables=False,
+            separate_tables=False,  # 不分离表格
             delimiter=parser_config.get("delimiter", "\n!?;。；！？"),
-            return_section_images=True,
+            return_section_images=True,  # 返回每个段落关联的图片
         )
         sections = _normalize_section_text_for_rtl_presentation_forms(sections)
 
+        # 标记为 Markdown（后续使用专用分块逻辑）
         is_markdown = True
 
+        # 步骤2：视觉模型检测（可选）
         try:
             vision_model_config = get_tenant_default_model_by_type(kwargs["tenant_id"], LLMType.IMAGE2TEXT)
             vision_model = LLMBundle(kwargs["tenant_id"], vision_model_config)
@@ -1012,63 +1646,88 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             logging.warning(f"Failed to detect figure extraction: {e}")
             vision_model = None
 
+        # 步骤3：图片内容增强（使用视觉模型）
         if vision_model:
-            # Process images for each section
+            # 为每个段落的图片生成描述
             for idx, (section_text, _) in enumerate(sections):
                 images = []
                 if section_images and len(section_images) > idx and section_images[idx] is not None:
                     images.append(section_images[idx])
 
                 if images and len(images) > 0:
-                    # If multiple images found, combine them using concat_img
+                    # 合并多个图片
                     combined_image = reduce(concat_img, images) if len(images) > 1 else images[0]
                     if section_images:
                         section_images[idx] = combined_image
                     else:
                         section_images = [None] * len(sections)
                         section_images[idx] = combined_image
-                    markdown_vision_parser = VisionFigureParser(vision_model=vision_model, figures_data=[((combined_image, ["markdown image"]), [(0, 0, 0, 0, 0)])], **kwargs)
+
+                    # 使用视觉模型生成图片描述
+                    markdown_vision_parser = VisionFigureParser(
+                        vision_model=vision_model,
+                        figures_data=[((combined_image, ["markdown image"]), [(0, 0, 0, 0, 0)])],
+                        **kwargs
+                    )
                     boosted_figures = markdown_vision_parser(callback=callback)
-                    sections[idx] = (section_text + "\n\n" + "\n\n".join([fig[0][1] for fig in boosted_figures]), sections[idx][1])
+                    # 将图片描述追加到段落文本
+                    sections[idx] = (
+                        section_text + "\n\n" + "\n\n".join([fig[0][1] for fig in boosted_figures]),
+                        sections[idx][1]
+                    )
 
         else:
             logging.warning("No visual model detected. Skipping figure parsing enhancement.")
 
+        # 步骤4：超链接提取（可选）
         if parser_config.get("hyperlink_urls", False) and is_root:
             for idx, (section_text, _) in enumerate(sections):
                 soup = markdown_parser.md_to_html(section_text)
                 hyperlink_urls = markdown_parser.get_hyperlink_urls(soup)
                 urls.update(hyperlink_urls)
+
+        # 步骤5：表格分词
         res = tokenize_table(tables, doc, is_english)
         callback(0.8, "Finish parsing.")
 
+    # ------------------ HTML 网页处理 ------------------
     elif re.search(r"\.(htm|html)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
+
+        # 使用 HTML 解析器
         chunk_token_num = int(parser_config.get("chunk_token_num", 128))
         sections = HtmlParser()(filename, binary, chunk_token_num)
-        sections = [(_, "") for _ in sections if _]
+        sections = [(_, "") for _ in sections if _]  # 转换为统一格式
         sections = _normalize_section_text_for_rtl_presentation_forms(sections)
         callback(0.8, "Finish parsing.")
 
+    # ------------------ EPUB 电子书处理 ------------------
     elif re.search(r"\.epub$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
+
+        # 使用 EPUB 解析器
         chunk_token_num = int(parser_config.get("chunk_token_num", 128))
         sections = EpubParser()(filename, binary, chunk_token_num)
-        sections = [(_, "") for _ in sections if _]
+        sections = [(_, "") for _ in sections if _]  # 转换为统一格式
         sections = _normalize_section_text_for_rtl_presentation_forms(sections)
         callback(0.8, "Finish parsing.")
 
+    # ------------------ JSON 数据处理 ------------------
     elif re.search(r"\.(json|jsonl|ldjson)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
+
+        # 使用 JSON 解析器
         chunk_token_num = int(parser_config.get("chunk_token_num", 128))
         sections = JsonParser(chunk_token_num)(binary)
-        sections = [(_, "") for _ in sections if _]
+        sections = [(_, "") for _ in sections if _]  # 转换为统一格式
         sections = _normalize_section_text_for_rtl_presentation_forms(sections)
         callback(0.8, "Finish parsing.")
 
+    # ------------------ DOC 旧版 Word 文档处理 ------------------
     elif re.search(r"\.doc$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
 
+        # 使用 Apache Tika 解析（需要安装 tika）
         try:
             from tika import parser as tika_parser
         except Exception as e:
@@ -1076,11 +1735,12 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             logging.warning(f"tika not available: {e}. Unsupported .doc parsing for {filename}.")
             return []
 
+        # 调用 Tika 解析器
         binary = BytesIO(binary)
         doc_parsed = tika_parser.from_buffer(binary)
         if doc_parsed.get("content", None) is not None:
             sections = doc_parsed["content"].split("\n")
-            sections = [(_, "") for _ in sections if _]
+            sections = [(_, "") for _ in sections if _]  # 转换为统一格式
             sections = _normalize_section_text_for_rtl_presentation_forms(sections)
             callback(0.8, "Finish parsing.")
         else:
@@ -1088,11 +1748,17 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             callback(0.8, error_msg)
             logging.warning(error_msg)
             return []
+
+    # ------------------ 不支持的文件类型 ------------------
     else:
         raise NotImplementedError("file type not supported yet(pdf, xlsx, doc, docx, txt supported)")
 
+    # ========== 通用分块逻辑 ==========
+    # 对于非 DOCX、非表格类型的文件，使用通用分块逻辑
     st = timer()
     overlapped_percent = normalize_overlapped_percent(parser_config.get("overlapped_percent", 0))
+
+    # ------------------ Markdown 专用分块逻辑 ------------------
     if is_markdown:
         merged_chunks = []
         merged_images = []
@@ -1102,32 +1768,42 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         current_tokens = 0
         current_image = None
 
+        # 遍历所有段落，合并为不超过 token 限制的块
         for idx, sec in enumerate(sections):
             text = sec[0] if isinstance(sec, tuple) else sec
             sec_tokens = num_tokens_from_string(text)
             sec_image = section_images[idx] if section_images and idx < len(section_images) else None
 
+            # 检查是否超出 token 限制
             if current_text and current_tokens + sec_tokens > chunk_limit:
+                # 保存当前块
                 merged_chunks.append(current_text)
                 merged_images.append(current_image)
+
+                # 计算重叠部分（用于保留上下文）
                 overlap_part = ""
                 if overlapped_percent > 0:
                     overlap_len = int(len(current_text) * overlapped_percent / 100)
                     if overlap_len > 0:
                         overlap_part = current_text[-overlap_len:]
+
+                # 重置当前块为重叠部分
                 current_text = overlap_part
                 current_tokens = num_tokens_from_string(current_text)
                 current_image = current_image if overlap_part else None
 
+            # 追加新段落到当前块
             if current_text:
                 current_text += "\n" + text
             else:
                 current_text = text
             current_tokens += sec_tokens
 
+            # 合并图片
             if sec_image:
                 current_image = concat_img(current_image, sec_image) if current_image else sec_image
 
+        # 添加最后一个块
         if current_text:
             merged_chunks.append(current_text)
             merged_images.append(current_image)
@@ -1135,24 +1811,43 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         chunks = merged_chunks
         has_images = merged_images and any(img is not None for img in merged_images)
 
+        # 根据是否有图片选择分词方法
         if has_images:
             res.extend(tokenize_chunks_with_images(chunks, doc, is_english, merged_images, child_delimiters_pattern=child_deli))
         else:
             res.extend(tokenize_chunks(chunks, doc, is_english, pdf_parser, child_delimiters_pattern=child_deli))
+
+    # ------------------ 其他格式通用分块逻辑 ------------------
     else:
+        # 检查是否所有图片都为空（是则清除）
         if section_images:
             if all(image is None for image in section_images):
                 section_images = None
 
+        # 根据是否有图片选择分块方法
         if section_images:
-            chunks, images = naive_merge_with_images(sections, section_images, int(parser_config.get("chunk_token_num", 128)), parser_config.get("delimiter", "\n!?。；！？"), overlapped_percent)
+            # 使用带图片的分块算法
+            chunks, images = naive_merge_with_images(
+                sections,
+                section_images,
+                int(parser_config.get("chunk_token_num", 128)),
+                parser_config.get("delimiter", "\n!?。；！？"),
+                overlapped_percent
+            )
             res.extend(tokenize_chunks_with_images(chunks, doc, is_english, images, child_delimiters_pattern=child_deli))
         else:
-            chunks = naive_merge(sections, int(parser_config.get("chunk_token_num", 128)), parser_config.get("delimiter", "\n!?。；！？"), overlapped_percent)
-
+            # 使用标准分块算法
+            chunks = naive_merge(
+                sections,
+                int(parser_config.get("chunk_token_num", 128)),
+                parser_config.get("delimiter", "\n!?。；！？"),
+                overlapped_percent
+            )
             res.extend(tokenize_chunks(chunks, doc, is_english, pdf_parser, child_delimiters_pattern=child_deli))
 
+    # ========== 超链接递归解析 ==========
     if urls and parser_config.get("analyze_hyperlink", False) and is_root:
+        # 递归解析提取的超链接
         for index, url in enumerate(urls):
             html_bytes, metadata = extract_html(url)
             if not html_bytes:
@@ -1166,19 +1861,29 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
 
     logging.info("naive_merge({}): {}".format(filename, timer() - st))
 
+    # ========== 合并所有结果 ==========
     if embed_res:
-        res.extend(embed_res)
+        res.extend(embed_res)  # 嵌入文件的解析结果
     if url_res:
-        res.extend(url_res)
+        res.extend(url_res)  # 超链接的解析结果
+
+    # 可选：为表格和图片添加上下文
     # if table_context_size or image_context_size:
     #    attach_media_context(res, table_context_size, image_context_size)
+
     return res
 
 
+# ========== 命令行入口 ==========
 if __name__ == "__main__":
     import sys
 
     def dummy(prog=None, msg=""):
+        """
+        空的进度回调函数（用于命令行测试）
+        """
         pass
 
+    # 从命令行参数获取文件路径，执行分块
+    # 用法：python naive.py <文件路径>
     chunk(sys.argv[1], from_page=0, to_page=10, callback=dummy)
