@@ -13,6 +13,19 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+Chat API 模块
+
+本模块提供聊天对话相关的 RESTful API 接口，包括对话助手的创建、查询、更新、删除，
+以及会话管理、消息反馈、语音合成/识别、思维导图生成等功能。
+主要功能：
+- Chat (对话助手) CRUD 操作
+- Session (会话) 管理
+- Message (消息) 反馈与删除
+- TTS (文本转语音) 与 ASR (语音转文本)
+- 相关问题推荐与思维导图生成
+- 流式对话补全接口
+"""
 
 import json
 import logging
@@ -50,6 +63,11 @@ from common.misc_utils import get_uuid
 from rag.prompts.generator import chunks_format
 from rag.prompts.template import load_prompt
 
+# ==============================================================================
+# 模块级常量定义
+# ==============================================================================
+
+# 对话助手的默认提示词配置，包含系统提示词、开场白、参数、空回复等
 _DEFAULT_PROMPT_CONFIG = {
     "system": (
         'You are an intelligent assistant. Please summarize the content of the dataset to answer the question. '
@@ -67,12 +85,24 @@ _DEFAULT_PROMPT_CONFIG = {
     "tts": False,
     "refine_multiturn": True,
 }
+# 内置的默认 Rerank 模型集合，这些模型无需额外验证即可使用
 _DEFAULT_RERANK_MODELS = {"BAAI/bge-reranker-v2-m3", "maidalun1020/bce-reranker-base_v1"}
+# 只读字段集合，创建/更新时不可由用户指定
 _READONLY_FIELDS = {"id", "tenant_id", "created_by", "create_time", "create_date", "update_time", "update_date"}
+# Dialog 模型中可持久化的字段集合，用于过滤请求中的非法字段
 _PERSISTED_FIELDS = set(DialogService.model._meta.fields)
 
 
+# ==============================================================================
+# 内部辅助函数
+# ==============================================================================
+
+
 def _build_chat_response(chat):
+    """构建 Chat 对象的 API 响应数据。
+
+    将内部 kb_ids 转换为外部 API 暴露的 dataset_ids，并附加知识库名称列表。
+    """
     data = chat.to_dict() if hasattr(chat, "to_dict") else dict(chat)
     kb_ids, kb_names = _resolve_kb_names(data.get("kb_ids", []))
     data["dataset_ids"] = kb_ids
@@ -82,6 +112,7 @@ def _build_chat_response(chat):
 
 
 def _resolve_kb_names(kb_ids):
+    """根据知识库 ID 列表查询有效的知识库，返回 (有效ID列表, 名称列表)。"""
     ids, names = [], []
     for kb_id in kb_ids or []:
         ok, kb = KnowledgebaseService.get_by_id(kb_id)
@@ -93,10 +124,20 @@ def _resolve_kb_names(kb_ids):
 
 
 def _has_knowledge_placeholder(prompt_config):
+    """检查提示词配置中的 system 字段是否包含 {knowledge} 占位符。"""
     return "{knowledge}" in (prompt_config or {}).get("system", "")
 
 
 def _validate_name(name, *, required=True):
+    """验证对话名称：类型检查、非空检查、UTF-8 长度上限 255。
+
+    Args:
+        name: 待验证的名称值
+        required: 名称是否为必填项
+
+    Returns:
+        (名称, 错误信息) 元组，验证通过时错误信息为 None
+    """
     if name is None:
         if required:
             return None, "`name` is required."
@@ -112,6 +153,11 @@ def _validate_name(name, *, required=True):
 
 
 def _build_session_response(conv: dict) -> dict:
+    """构建 Session (会话) 对象的 API 响应数据。
+
+    将内部的 dialog_id 字段映射为外部 API 的 chat_id，
+    将 message 字段映射为 messages，保持与 API 规范一致。
+    """
     conv = dict(conv)
     conv["chat_id"] = conv.pop("dialog_id", conv.get("chat_id"))
     conv["messages"] = conv.pop("message", conv.get("messages", []))
@@ -119,12 +165,21 @@ def _build_session_response(conv: dict) -> dict:
 
 
 def _ensure_owned_chat(chat_id):
+    """验证当前用户是否拥有指定的 Chat，返回查询结果（非空即拥有）。"""
     return DialogService.query(
         tenant_id=current_user.id, id=chat_id, status=StatusEnum.VALID.value
     )
 
 
 def _validate_llm_id(llm_id, tenant_id, llm_setting=None):
+    """验证 LLM 模型 ID 是否在租户的可用模型列表中。
+
+    根据 llm_setting 中的 model_type 判断模型类型（默认 chat），
+    查询 TenantLLMService 确认模型存在。
+
+    Returns:
+        验证通过返回 None，失败返回错误信息字符串
+    """
     if not llm_id:
         return None
 
@@ -144,6 +199,14 @@ def _validate_llm_id(llm_id, tenant_id, llm_setting=None):
 
 
 def _validate_rerank_id(rerank_id, tenant_id):
+    """验证 Rerank 模型 ID。
+
+    内置默认 Rerank 模型（如 bge-reranker-v2-m3）直接放行，
+    其他模型需在租户的可用模型列表中存在。
+
+    Returns:
+        验证通过返回 None，失败返回错误信息字符串
+    """
     if not rerank_id:
         return None
     llm_name, llm_factory = TenantLLMService.split_model_name_and_factory(rerank_id)
@@ -169,6 +232,14 @@ def _validate_rerank_id(rerank_id, tenant_id):
 
 
 def _validate_dataset_ids(dataset_ids, tenant_id):
+    """验证数据集 ID 列表的合法性。
+
+    依次检查：类型为 list、每个 ID 用户有权限访问、知识库存在、
+    知识库中有已解析的文件，以及所有知识库使用相同的 Embedding 模型。
+
+    Returns:
+        验证通过返回规范化后的 ID 列表，失败返回错误信息字符串
+    """
     if dataset_ids is None:
         return []
     if not isinstance(dataset_ids, list):
@@ -187,6 +258,7 @@ def _validate_dataset_ids(dataset_ids, tenant_id):
             return f"The dataset {dataset_id} doesn't own parsed file"
         kbs.append(kb)
 
+    # 确保所有数据集使用相同的 Embedding 模型，否则无法在同一个对话中检索
     embd_ids = [TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]
     if len(set(embd_ids)) > 1:
         return f'Datasets use different embedding models: {[kb.embd_id for kb in kbs]}'
@@ -195,6 +267,11 @@ def _validate_dataset_ids(dataset_ids, tenant_id):
 
 
 def _apply_prompt_defaults(req):
+    """为请求中的 prompt_config 填充默认值。
+
+    如果用户未提供 system 提示词或其他关键字段，使用 _DEFAULT_PROMPT_CONFIG 补全。
+    当有关联知识库且系统提示词包含 {knowledge} 占位符时，自动添加 knowledge 参数。
+    """
     prompt_config = req.setdefault("prompt_config", {})
     for key, value in _DEFAULT_PROMPT_CONFIG.items():
         temp = prompt_config.get(key)
@@ -205,9 +282,19 @@ def _apply_prompt_defaults(req):
         prompt_config["parameters"] = [{"key": "knowledge", "optional": False}]
 
 
+# ==============================================================================
+# Chat (对话) CRUD 接口
+# ==============================================================================
+
+
 @manager.route("/chats", methods=["POST"])  # noqa: F821
 @login_required
 async def create():
+    """创建新的 Chat 对话助手 (POST /chats)。
+
+    接收对话配置（名称、关联数据集、LLM 模型、提示词等），经过验证后持久化。
+    自动填充默认值（LLM ID、检索参数、提示词配置等）。
+    """
     try:
         req = await get_request_json()
         ok, tenant = TenantService.get_by_id(current_user.id)
@@ -293,6 +380,11 @@ async def create():
 @manager.route("/chats", methods=["GET"])  # noqa: F821
 @login_required
 def list_chats():
+    """获取 Chat 对话助手列表 (GET /chats)。
+
+    支持按 id、name 精确过滤，按 keywords 模糊搜索，按 owner_ids 筛选指定用户的对话，
+    支持分页和排序。返回对话列表及总数。
+    """
     chat_id = request.args.get("id")
     name = request.args.get("name")
     keywords = request.args.get("keywords", "")
@@ -331,6 +423,10 @@ def list_chats():
 @manager.route("/chats/<chat_id>", methods=["GET"])  # noqa: F821
 @login_required
 def get_chat(chat_id):
+    """获取单个 Chat 对话助手详情 (GET /chats/<chat_id>)。
+
+    验证当前用户所属的租户是否拥有该对话，权限校验通过后返回详情。
+    """
     try:
         tenants = UserTenantService.query(user_id=current_user.id)
         for tenant in tenants:
@@ -356,6 +452,11 @@ def get_chat(chat_id):
 @manager.route("/chats/<chat_id>", methods=["PUT"])  # noqa: F821
 @login_required
 async def update_chat(chat_id):
+    """全量更新 Chat 对话助手配置 (PUT /chats/<chat_id>)。
+
+    仅允许对话所有者操作。请求体中的字段将整体替换现有配置，
+    需传入完整的配置内容。不允许修改 tenant_id 等只读字段。
+    """
     if not _ensure_owned_chat(chat_id):
         return get_json_result(
             data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR
@@ -442,6 +543,12 @@ async def update_chat(chat_id):
 @manager.route("/chats/<chat_id>", methods=["PATCH"])  # noqa: F821
 @login_required
 async def patch_chat(chat_id):
+    """部分更新 Chat 对话助手配置 (PATCH /chats/<chat_id>)。
+
+    与 PUT 不同，PATCH 只修改请求体中指定的字段。
+    对于 prompt_config 和 llm_setting 等嵌套对象，采用深度合并策略
+    （先 deepcopy 当前值，再 update 请求值）。
+    """
     if not _ensure_owned_chat(chat_id):
         return get_json_result(
             data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR
@@ -536,6 +643,10 @@ async def patch_chat(chat_id):
 @manager.route("/chats/<chat_id>", methods=["DELETE"])  # noqa: F821
 @login_required
 def delete_chat(chat_id):
+    """删除单个 Chat 对话助手 (DELETE /chats/<chat_id>)。
+
+    软删除：将 status 设为 INVALID，不物理删除数据。
+    """
     if not _ensure_owned_chat(chat_id):
         return get_json_result(
             data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR
@@ -552,6 +663,18 @@ def delete_chat(chat_id):
 @manager.route("/chats", methods=["DELETE"])  # noqa: F821
 @login_required
 async def bulk_delete_chats():
+    """批量删除 Chat 对话助手 (DELETE /chats)。
+
+    支持通过 ids 列表指定要删除的对话，或通过 delete_all=true 删除所有对话。
+    软删除：将 status 设为 INVALID，不物理删除数据。
+
+    Args:
+        ids: 要删除的对话 ID 列表（可选）
+        delete_all: 是否删除所有对话（可选，默认 false）
+
+    Returns:
+        成功返回 success_count，部分失败返回错误详情
+    """
     req = await get_request_json()
     if not req:
         return get_json_result(data={})
@@ -592,9 +715,25 @@ async def bulk_delete_chats():
     return get_json_result(data={"success_count": success_count})
 
 
+# ==============================================================================
+# Session (会话) 管理接口
+# ==============================================================================
+
+
 @manager.route("/chats/<chat_id>/sessions", methods=["POST"])  # noqa: F821
 @login_required
 async def create_session(chat_id):
+    """创建新的 Session 会话 (POST /chats/<chat_id>/sessions)。
+
+    为指定对话助手创建一个新的会话实例，会话以对话助手的开场白作为首条消息。
+
+    Args:
+        name: 会话名称（可选，默认 "New session"）
+        user_id: 会话所属用户 ID（可选，默认当前用户）
+
+    Returns:
+        返回创建的会话详情，包含 chat_id、messages 等字段
+    """
     if not _ensure_owned_chat(chat_id):
         return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
     try:
@@ -626,6 +765,22 @@ async def create_session(chat_id):
 @manager.route("/chats/<chat_id>/sessions", methods=["GET"])  # noqa: F821
 @login_required
 def list_sessions(chat_id):
+    """获取 Session 会话列表 (GET /chats/<chat_id>/sessions)。
+
+    支持按 id、name、user_id 过滤，支持分页和排序。
+
+    Args:
+        page: 页码（可选，默认 1）
+        page_size: 每页数量（可选，默认 30）
+        orderby: 排序字段（可选，默认 create_time）
+        desc: 是否降序（可选，默认 true）
+        id: 会话 ID 精确过滤（可选）
+        name: 会话名称精确过滤（可选）
+        user_id: 用户 ID 过滤（可选）
+
+    Returns:
+        返回会话列表
+    """
     try:
         if not _ensure_owned_chat(chat_id):
             return get_json_result(
@@ -653,6 +808,14 @@ def list_sessions(chat_id):
 @manager.route("/chats/<chat_id>/sessions/<session_id>", methods=["GET"])  # noqa: F821
 @login_required
 async def get_session(chat_id, session_id):
+    """获取单个 Session 会话详情 (GET /chats/<chat_id>/sessions/<session_id>)。
+
+    返回会话的完整信息，包括消息历史和引用的文档块。
+    同时附加对话助手的 avatar 图标信息。
+
+    Returns:
+        返回会话详情，包含 chat_id、messages、avatar 等字段
+    """
     if not _ensure_owned_chat(chat_id):
         return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
     try:
@@ -677,6 +840,16 @@ async def get_session(chat_id, session_id):
 @manager.route("/chats/<chat_id>/sessions/<session_id>", methods=["PUT"])  # noqa: F821
 @login_required
 async def update_session(chat_id, session_id):
+    """更新 Session 会话 (PUT /chats/<chat_id>/sessions/<session_id>)。
+
+    仅允许修改会话的名称，不允许修改 messages 和 reference 字段。
+
+    Args:
+        name: 新的会话名称（可选）
+
+    Returns:
+        返回更新后的会话详情
+    """
     if not _ensure_owned_chat(chat_id):
         return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
     try:
@@ -706,6 +879,18 @@ async def update_session(chat_id, session_id):
 @manager.route("/chats/<chat_id>/sessions", methods=["DELETE"])  # noqa: F821
 @login_required
 async def delete_sessions(chat_id):
+    """批量删除 Session 会话 (DELETE /chats/<chat_id>/sessions)。
+
+    支持通过 ids 列表指定要删除的会话，或通过 delete_all=true 删除所有会话。
+    物理删除：直接从数据库中删除会话记录。
+
+    Args:
+        ids: 要删除的会话 ID 列表（可选）
+        delete_all: 是否删除所有会话（可选，默认 false）
+
+    Returns:
+        成功返回 success_count，部分失败返回错误详情
+    """
     if not _ensure_owned_chat(chat_id):
         return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
     try:
@@ -743,9 +928,25 @@ async def delete_sessions(chat_id):
         return server_error_response(ex)
 
 
+# ==============================================================================
+# Message (消息) 相关接口
+# ==============================================================================
+
+
 @manager.route("/chats/<chat_id>/sessions/<session_id>/messages/<msg_id>", methods=["DELETE"])  # noqa: F821
 @login_required
 async def delete_session_message(chat_id, session_id, msg_id):
+    """删除会话中的一对问答消息 (DELETE /chats/<chat_id>/sessions/<session_id>/messages/<msg_id>)。
+
+    消息以问答对的形式存储（用户问题 + 助手回答），删除时同时删除两者。
+    msg_id 是用户消息的 ID，对应的助手回答消息使用相同的 ID。
+
+    Args:
+        msg_id: 要删除的用户消息 ID
+
+    Returns:
+        返回更新后的会话详情
+    """
     if not _ensure_owned_chat(chat_id):
         return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
     try:
@@ -770,6 +971,18 @@ async def delete_session_message(chat_id, session_id, msg_id):
 @manager.route("/chats/<chat_id>/sessions/<session_id>/messages/<msg_id>/feedback", methods=["PUT"])  # noqa: F821
 @login_required
 async def update_message_feedback(chat_id, session_id, msg_id):
+    """更新消息反馈 (PUT /chats/<chat_id>/sessions/<session_id>/messages/<msg_id>/feedback)。
+
+    允许用户对助手回答进行点赞/点踩反馈，并可选填写反馈意见。
+    同时将反馈应用到关联的文档块，用于优化检索效果。
+
+    Args:
+        thumbup: 是否点赞（布尔值，必填）
+        feedback: 反馈意见文本（可选）
+
+    Returns:
+        返回更新后的会话详情
+    """
     owned = _ensure_owned_chat(chat_id)
     if not owned:
         return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
@@ -832,9 +1045,25 @@ async def update_message_feedback(chat_id, session_id, msg_id):
         return server_error_response(ex)
 
 
+# ==============================================================================
+# TTS (文本转语音) 与 ASR (语音转文本) 接口
+# ==============================================================================
+
+
 @manager.route("/chats/tts", methods=["POST"])  # noqa: F821
 @login_required
 async def tts():
+    """文本转语音 (POST /chats/tts)。
+
+    将输入的文本转换为语音流，使用租户默认的 TTS 模型。
+    按标点符号分句后逐句生成语音，返回 audio/mpeg 格式的流式响应。
+
+    Args:
+        text: 要转换为语音的文本（必填）
+
+    Returns:
+        返回 audio/mpeg 格式的流式语音响应
+    """
     req = await get_request_json()
     text = req["text"]
 
@@ -863,6 +1092,19 @@ async def tts():
 @manager.route("/chats/transcriptions", methods=["POST"])  # noqa: F821
 @login_required
 async def transcriptions():
+    """语音转文本 (POST /chats/transcriptions)。
+
+    将上传的音频文件转换为文本，使用租户默认的 ASR 模型。
+    支持多种音频格式，支持流式和非流式两种模式。
+
+    Args:
+        file: 音频文件（multipart/form-data，必填）
+        stream: 是否使用流式模式（可选，默认 false）
+
+    Returns:
+        非流式模式：返回 {"text": "识别的文本"}
+        流式模式：返回 text/event-stream 格式的流式响应
+    """
     req = await request.form
     stream_mode = req.get("stream", "false").lower() == "true"
     files = await request.files
@@ -918,10 +1160,28 @@ async def transcriptions():
     return Response(event_stream(), content_type="text/event-stream")
 
 
+# ==============================================================================
+# 高级功能接口：思维导图、相关问题推荐
+# ==============================================================================
+
+
 @manager.route("/chats/mindmap", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("question", "kb_ids")
 async def mindmap():
+    """生成思维导图 (POST /chats/mindmap)。
+
+    基于用户问题和知识库内容生成思维导图，帮助用户理解知识结构。
+    可以结合 search_app 的搜索配置来增强检索效果。
+
+    Args:
+        question: 用户问题（必填）
+        kb_ids: 知识库 ID 列表（必填）
+        search_id: 搜索应用 ID（可选，用于获取搜索配置）
+
+    Returns:
+        返回思维导图的 JSON 结构
+    """
     req = await get_request_json()
     search_id = req.get("search_id", "")
     search_app = SearchService.get_detail(search_id) if search_id else {}
@@ -940,6 +1200,18 @@ async def mindmap():
 @login_required
 @validate_request("question")
 async def related_questions():
+    """生成相关问题推荐 (POST /chats/related_questions)。
+
+    基于用户问题生成相关的搜索词或问题列表，帮助用户扩展查询。
+    使用 LLM 模型生成相关问题，返回格式化的结果列表。
+
+    Args:
+        question: 用户问题（必填）
+        search_id: 搜索应用 ID（可选，用于获取搜索配置）
+
+    Returns:
+        返回相关问题列表，格式为 ["问题1", "问题2", ...]
+    """
     req = await get_request_json()
 
     search_id = req.get("search_id", "")
@@ -974,10 +1246,32 @@ async def related_questions():
     return get_json_result(data=[re.sub(r"^[0-9]\. ", "", a) for a in ans.split("\n") if re.match(r"^[0-9]\. ", a)])
 
 
+# ==============================================================================
+# 对话补全接口
+# ==============================================================================
+
+# Web前端会话补全接口，POST /chats/<chat_id>/sessions/<session_id>/completions，调用 dialog_service.async_chat
 @manager.route("/chats/<chat_id>/sessions/<session_id>/completions", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("messages")
 async def session_completion(chat_id, session_id):
+    """会话补全接口 (POST /chats/<chat_id>/sessions/<session_id>/completions)。
+
+    Web 前端的主要对话接口，调用 dialog_service.async_chat 进行对话补全。
+    支持流式和非流式两种模式，支持自定义 LLM 模型和参数。
+
+    Args:
+        messages: 消息历史列表（必填）
+        llm_id: 自定义 LLM 模型 ID（可选）
+        stream: 是否使用流式模式（可选，默认 true）
+        temperature: 生成温度（可选）
+        top_p: 核采样参数（可选）
+        max_tokens: 最大生成 token 数（可选）
+
+    Returns:
+        流式模式：返回 text/event-stream 格式的流式响应
+        非流式模式：返回完整的对话响应
+    """
     req = await get_request_json()
     msg = []
     for m in req["messages"]:
@@ -1024,6 +1318,7 @@ async def session_completion(chat_id, session_id):
         async def stream():
             nonlocal dia, msg, req, conv
             try:
+                # 调用 dialog_service.async_chat 进行流式对话补全
                 async for ans in async_chat(dia, msg, True, **req):
                     ans = structure_answer(conv, ans, message_id, conv.id)
                     yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
@@ -1053,10 +1348,27 @@ async def session_completion(chat_id, session_id):
         return server_error_response(ex)
 
 
+# ==============================================================================
+# 快速提问接口
+# ==============================================================================
+
 @manager.route("/chats/ask", methods=["POST"])  # noqa: F821
 @login_required
 @validate_request("question", "kb_ids")
 async def ask():
+    """快速提问接口 (POST /chats/ask)。
+
+    无需创建会话即可进行单次问答，适合一次性查询场景。
+    使用指定的知识库进行检索增强，返回流式响应。
+
+    Args:
+        question: 用户问题（必填）
+        kb_ids: 知识库 ID 列表（必填）
+        search_id: 搜索应用 ID（可选，用于获取搜索配置）
+
+    Returns:
+        返回 text/event-stream 格式的流式响应
+    """
     req = await get_request_json()
     uid = current_user.id
 

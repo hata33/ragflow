@@ -28,9 +28,11 @@ from rag.app.tag import label_question
 from common.constants import RetCode, LLMType
 from common import settings
 
+# Dify兼容检索接口，POST /dify/retrieval
+# 该接口供Dify平台通过外部知识库API调用RAGFlow的检索能力
 @manager.route('/dify/retrieval', methods=['POST'])  # noqa: F821
-@apikey_required
-@validate_request("knowledge_id", "query")
+@apikey_required  # 验证API Key，确保只有授权用户可访问
+@validate_request("knowledge_id", "query")  # 校验必填参数：知识库ID和查询文本
 async def retrieval(tenant_id):
     """
     Dify-compatible retrieval API
@@ -115,15 +117,15 @@ async def retrieval(tenant_id):
       404:
         description: Knowledge base or document not found
     """
-    req = await get_request_json()
-    question = req["query"]
-    kb_id = req["knowledge_id"]
-    use_kg = req.get("use_kg", False)
-    retrieval_setting = req.get("retrieval_setting", {})
-    similarity_threshold = float(retrieval_setting.get("score_threshold", 0.0))
-    top = int(retrieval_setting.get("top_k", 1024))
-    metadata_condition = req.get("metadata_condition", {}) or {}
-    metas = DocMetadataService.get_flatted_meta_by_kbs([kb_id])
+    req = await get_request_json()  # 异步解析请求体JSON
+    question = req["query"]  # 用户查询文本
+    kb_id = req["knowledge_id"]  # 目标知识库ID
+    use_kg = req.get("use_kg", False)  # 是否启用知识图谱检索
+    retrieval_setting = req.get("retrieval_setting", {})  # 检索配置项（相似度阈值、返回数量等）
+    similarity_threshold = float(retrieval_setting.get("score_threshold", 0.0))  # 相似度阈值，低于此值的结果将被过滤
+    top = int(retrieval_setting.get("top_k", 1024))  # 返回结果数量上限
+    metadata_condition = req.get("metadata_condition", {}) or {}  # 元数据过滤条件
+    metas = DocMetadataService.get_flatted_meta_by_kbs([kb_id])  # 获取该知识库下所有文档的扁平化元数据，用于后续过滤
 
     doc_ids = []
     try:

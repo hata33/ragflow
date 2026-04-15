@@ -13,7 +13,20 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-import asyncio
+"""
+对话服务模块
+
+本模块提供对话助手的核心业务逻辑，包括对话管理、检索增强生成（RAG）、
+模型绑定、SQL 检索、思维导图生成等功能。
+主要功能：
+- Dialog (对话助手) 数据库操作
+- RAG 检索与对话生成
+- SQL 结构化数据查询
+- 多模态消息处理
+- 文本转语音 (TTS)
+- 思维导图生成
+- 流式输出处理
+"""
 import binascii
 import logging
 import re
@@ -49,7 +62,21 @@ from common.string_utils import remove_redundant_spaces
 from common import settings
 
 
+# ==============================================================================
+# DialogService - 对话助手数据库服务类
+# ==============================================================================
+
+
 class DialogService(CommonService):
+    """
+    对话助手服务类
+
+    提供 Dialog (对话助手) 的数据库操作方法，包括增删改查、
+    租户关联查询、模型配置迁移等。
+
+    Attributes:
+        model: Dialog 数据库模型类
+    """
     model = Dialog
 
     @classmethod
@@ -209,7 +236,25 @@ class DialogService(CommonService):
         return list(objs)
 
 
+# ==============================================================================
+# 核心对话处理函数
+# ==============================================================================
+
+
 async def async_chat_solo(dialog, messages, stream=True):
+    """纯 LLM 对话（无知识库检索）。
+
+    当对话助手未配置知识库时，直接调用 LLM 进行对话，
+    支持文本和图像输入，支持流式和非流式输出。
+
+    Args:
+        dialog: Dialog 对话配置对象
+        messages: 消息历史列表
+        stream: 是否使用流式输出（默认 True）
+
+    Yields:
+        dict: 包含 answer、reference、audio_binary 等字段的响应字典
+    """
     llm_type = TenantLLMService.llm_id2llm_type(dialog.llm_id)
     attachments = ""
     image_attachments = []
@@ -256,6 +301,29 @@ async def async_chat_solo(dialog, messages, stream=True):
 
 
 def get_models(dialog):
+    """获取对话所需的所有模型实例。
+
+    根据对话配置获取并初始化以下模型：
+    - Embedding 模型：用于文档向量化
+    - Chat 模型：用于对话生成
+    - Rerank 模型：用于检索结果重排序
+    - TTS 模型：用于文本转语音（可选）
+
+    Args:
+        dialog: Dialog 对话配置对象
+
+    Returns:
+        tuple: (kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl)
+            - kbs: 知识库列表
+            - embd_mdl: Embedding 模型实例
+            - rerank_mdl: Rerank 模型实例（可能为 None）
+            - chat_mdl: Chat 模型实例
+            - tts_mdl: TTS 模型实例（可能为 None）
+
+    Raises:
+        Exception: 如果知识库使用不同的 Embedding 模型
+        LookupError: 如果找不到 Embedding 模型
+    """
     embd_mdl, chat_mdl, rerank_mdl, tts_mdl = None, None, None, None
     kbs = KnowledgebaseService.get_by_ids(dialog.kb_ids)
     embedding_list = list(set([kb.embd_id for kb in kbs]))
@@ -288,7 +356,27 @@ def get_models(dialog):
     return kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl
 
 
+# ==============================================================================
+# 文件与多模态消息处理
+# ==============================================================================
+
+
 def split_file_attachments(files: list[dict] | None, raw: bool = False) -> tuple[list[str], list[str] | list[dict]]:
+    """分离文件附件为文本和图像。
+
+    将用户上传的文件列表分离为文本附件和图像附件，
+    用于后续的多模态对话处理。
+
+    Args:
+        files: 文件元数据列表
+        raw: 是否返回原始图像文件（用于 image2text 模型）
+
+    Returns:
+        tuple: (text_attachments, image_attachments/image_files)
+            - text_attachments: 文本内容列表
+            - image_attachments: 图像 data URI 列表（chat 模型）
+            - image_files: 图像文件列表（image2text 模型）
+    """
     if not files:
         return [], []
 
@@ -316,6 +404,15 @@ _DATA_URI_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<b64>[A-Za-z0-9+/=\s
 
 
 def _parse_data_uri_or_b64(s: str, default_mime: str = "image/png") -> tuple[str, str]:
+    """解析 Data URI 或纯 Base64 字符串。
+
+    Args:
+        s: 输入字符串，可能是 data:image/png;base64,... 或纯 base64
+        default_mime: 默认 MIME 类型（默认 image/png）
+
+    Returns:
+        tuple: (mime_type, base64_string)
+    """
     s = (s or "").strip()
     match = _DATA_URI_RE.match(s)
     if match:
@@ -326,6 +423,17 @@ def _parse_data_uri_or_b64(s: str, default_mime: str = "image/png") -> tuple[str
 
 
 def _normalize_text_from_content(content) -> str:
+    """从多模态内容中提取纯文本。
+
+    支持从字符串、列表或字典格式的内容中提取文本。
+    用于处理多模态消息中的文本部分。
+
+    Args:
+        content: 多模态内容，可能是字符串、列表或字典
+
+    Returns:
+        str: 提取的纯文本
+    """
     if content is None:
         return ""
     if isinstance(content, str):
@@ -345,6 +453,19 @@ def _normalize_text_from_content(content) -> str:
 
 
 def convert_last_user_msg_to_multimodal(msg: list[dict], image_data_uris: list[str], factory: str) -> None:
+    """将最后一条用户消息转换为多模态格式。
+
+    根据不同的 LLM 厂商（OpenAI、Gemini、Anthropic 等），
+    将图像和文本组合为对应的多模态消息格式。
+
+    Args:
+        msg: 消息列表（会被就地修改）
+        image_data_uris: 图像 data URI 列表
+        factory: LLM 厂商名称（如 openai、gemini、anthropic）
+
+    Note:
+        此函数会就地修改 msg 列表中最后一条用户消息的 content 字段
+    """
     if not msg or not image_data_uris:
         return
 
@@ -402,6 +523,10 @@ def convert_last_user_msg_to_multimodal(msg: list[dict], image_data_uris: list[s
         return
 
 
+# ==============================================================================
+# 引用格式处理
+# ==============================================================================
+
 BAD_CITATION_PATTERNS = [
     re.compile(r"\(\s*ID\s*[: ]*\s*(\d+)\s*\)"),  # (ID: 12)
     re.compile(r"\[\s*ID\s*[: ]*\s*(\d+)\s*\]"),  # [ID: 12]
@@ -412,6 +537,20 @@ CITATION_MARKER_PATTERN = re.compile(r"\[(?:ID:)?([0-9\u0660-\u0669\u06F0-\u06F9
 
 
 def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
+    """修复不规范的引用格式。
+
+    识别并修复 LLM 输出中的各种不规范引用格式，
+    如 (ID: 12)、[ID: 12]、【ID: 12】、ref12 等，
+    统一转换为标准格式 [ID:12]。
+
+    Args:
+        answer: LLM 生成的回答文本
+        kbinfos: 检索结果信息，包含 chunks 列表
+        idx: 已识别的引用索引集合（会被就地修改）
+
+    Returns:
+        tuple: (修复后的 answer, 更新后的 idx)
+    """
     max_index = len(kbinfos["chunks"])
     normalized_answer = normalize_arabic_digits(answer) or ""
 
@@ -458,9 +597,53 @@ def repair_bad_citation_formats(answer: str, kbinfos: dict, idx: set):
     return answer, idx
 
 
+# ==============================================================================
+# RAG 对话检索主函数
+# ==============================================================================
+
+# 对话检索主函数，被多个API路由调用（如对话、Agent工作流等）
 async def async_chat(dialog, messages, stream=True, **kwargs):
+    """
+    RAG 对话检索主函数（核心对话入口）。
+
+    本函数实现了完整的检索增强生成（RAG）流程：
+    1. 判断是否需要检索（无知识库时走纯 LLM 对话）
+    2. 初始化 Langfuse 链路追踪
+    3. 绑定模型（Embedding、Chat、Rerank、TTS）
+    4. 尝试 SQL 检索（如果配置了字段映射）
+    5. 多轮对话问题精炼
+    6. 跨语言检索（可选）
+    7. 元数据过滤（可选）
+    8. 关键词提取（可选）
+    9. 执行检索（向量检索、重排序、TOC 增强、KG 检索、Tavily 检索）
+    10. 构建提示词并生成回答
+    11. 流式输出并处理引用
+
+    Args:
+        dialog: Dialog 对话配置对象
+        messages: 消息历史列表，最后一条必须是用户消息
+        stream: 是否使用流式输出（默认 True）
+        **kwargs: 额外参数
+            - doc_ids: 指定文档 ID 列表
+            - toolcall_session: 工具调用会话
+            - tools: 工具列表
+            - quote: 是否显示引用（默认 True）
+            - reasoning: 是否启用深度推理模式
+
+    Yields:
+        dict: 包含以下字段的响应字典
+            - answer: 回答文本
+            - reference: 引用的文档块
+            - audio_binary: TTS 音频数据（十六进制）
+            - prompt: 完整提示词（用于调试）
+            - created_at: 创建时间戳
+            - final: 是否为最终响应
+            - start_to_think: 开始思考标志
+            - end_to_think: 结束思考标志
+    """
     logging.debug("Begin async_chat")
     assert messages[-1]["role"] == "user", "The last content of this conversation is not from user."
+    # 无知识库且未配置外部检索时，走纯LLM对话分支（不检索）
     if not dialog.kb_ids and not dialog.prompt_config.get("tavily_api_key"):
         async for ans in async_chat_solo(dialog, messages, stream):
             yield ans
@@ -493,12 +676,14 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
             pass
 
     check_langfuse_tracer_ts = timer()
+    # 绑定模型：获取知识库列表及嵌入模型、重排序模型、对话模型、TTS模型实例
     kbs, embd_mdl, rerank_mdl, chat_mdl, tts_mdl = get_models(dialog)
     toolcall_session, tools = kwargs.get("toolcall_session"), kwargs.get("tools")
     if toolcall_session and tools:
         chat_mdl.bind_tools(toolcall_session, tools)
     bind_models_ts = timer()
 
+    # 获取检索器实例和用户问题列表（取最近3轮对话中的用户消息）
     retriever = settings.retriever
     questions = [m["content"] for m in messages if m["role"] == "user"][-3:]
     attachments = None
@@ -530,6 +715,7 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
         else:
             logging.debug("SQL failed or returned no results, falling back to vector search")
 
+    # 提取提示词模板中的参数键列表，用于后续组装系统提示词
     param_keys = [p["key"] for p in prompt_config.get("parameters", [])]
     logging.debug(f"attachments={attachments}, param_keys={param_keys}, embd_mdl={embd_mdl}")
 
@@ -541,11 +727,13 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
         if p["key"] not in kwargs:
             prompt_config["system"] = prompt_config["system"].replace("{%s}" % p["key"], " ")
 
+    # 多轮对话问题精炼：将多轮对话历史压缩为单一精炼问题，或仅取最后一轮问题
     if len(questions) > 1 and prompt_config.get("refine_multiturn"):
         questions = [await full_question(dialog.tenant_id, dialog.llm_id, messages)]
     else:
         questions = questions[-1:]
 
+    # 跨语言检索：将问题翻译为多种语言以提升检索召回率
     if prompt_config.get("cross_languages"):
         questions = [await cross_languages(dialog.tenant_id, dialog.llm_id, questions[0], prompt_config["cross_languages"])]
 
@@ -568,10 +756,12 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
     kbinfos = {"total": 0, "chunks": [], "doc_aggs": []}
     knowledges = []
 
+    # ===== 检索核心逻辑区域：根据配置选择不同的检索策略 =====
     if "knowledge" in param_keys:
         logging.debug("Proceeding with retrieval")
         tenant_ids = list(set([kb.tenant_id for kb in kbs]))
         knowledges = []
+        # DeepResearch 深度推理模式：将 retrieval 作为 partial 传入，由推理引擎自主决定何时检索
         if prompt_config.get("reasoning", False) or kwargs.get("reasoning"):
             reasoner = DeepResearcher(
                 chat_mdl,
@@ -787,7 +977,38 @@ async def async_chat(dialog, messages, stream=True, **kwargs):
     return
 
 
+# ==============================================================================
+# SQL 结构化数据检索
+# ==============================================================================
+
+
 async def use_sql(question, field_map, tenant_id, chat_mdl, quota=True, kb_ids=None):
+    """
+    使用 SQL 进行结构化数据检索。
+
+    当知识库配置了字段映射时，尝试将用户问题转换为 SQL 查询，
+    直接从文档存储引擎（Elasticsearch/Infinity/OceanBase）中检索结构化数据。
+    支持 SQL 生成、执行、错误修复、结果格式化等完整流程。
+
+    Args:
+        question: 用户问题
+        field_map: 字段映射字典，字段名 -> 显示名称
+        tenant_id: 租户 ID
+        chat_mdl: Chat 模型实例（用于生成 SQL）
+        quota: 是否返回配额信息（默认 True）
+        kb_ids: 知识库 ID 列表（Infinity 需要）
+
+    Returns:
+        dict | None: 包含 answer、reference、prompt 的字典，失败返回 None
+            - answer: Markdown 表格格式的回答
+            - reference: 引用的文档块和文档聚合信息
+            - prompt: 使用的系统提示词
+
+    Note:
+        - 支持 Elasticsearch、Infinity、OceanBase 三种存储引擎
+        - 对聚合查询（COUNT、SUM 等）会额外获取文档块用于引用
+        - 会自动修复 SQL 错误和缺失的源列
+    """
     logging.debug(f"use_sql: Question: {question}")
 
     # Determine which document engine we're using
@@ -1239,14 +1460,32 @@ Please correct the error and write SQL again using json_extract_string(chunk_dat
     logging.debug(f"use_sql: Returning answer with {len(result['reference']['chunks'])} chunks from {len(doc_aggs)} documents")
     return result
 
+
+# ==============================================================================
+# TTS (文本转语音) 处理
+# ==============================================================================
+
 def clean_tts_text(text: str) -> str:
+    """清理用于 TTS 的文本。
+
+    移除不适合语音合成的字符，包括控制字符、表情符号等，
+    并限制文本长度在合理范围内。
+
+    Args:
+        text: 原始文本
+
+    Returns:
+        str: 清理后的文本，最多 500 字符
+    """
     if not text:
         return ""
 
     text = text.encode("utf-8", "ignore").decode("utf-8", "ignore")
 
+    # 移除控制字符
     text = re.sub(r"[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]", "", text)
 
+    # 移除表情符号
     emoji_pattern = re.compile(
         "[\U0001F600-\U0001F64F"
         "\U0001F300-\U0001F5FF"
@@ -1260,15 +1499,29 @@ def clean_tts_text(text: str) -> str:
     )
     text = emoji_pattern.sub("", text)
 
+    # 规范化空白字符
     text = re.sub(r"\s+", " ", text).strip()
 
+    # 限制长度
     MAX_LEN = 500
     if len(text) > MAX_LEN:
         text = text[:MAX_LEN]
 
     return text
 
+
 def tts(tts_mdl, text):
+    """文本转语音。
+
+    使用 TTS 模型将文本转换为音频数据，返回十六进制编码的音频。
+
+    Args:
+        tts_mdl: TTS 模型实例
+        text: 要转换的文本
+
+    Returns:
+        str | None: 十六进制编码的音频数据，失败返回 None
+    """
     if not tts_mdl or not text:
         return None
     text = clean_tts_text(text)
@@ -1284,7 +1537,26 @@ def tts(tts_mdl, text):
     return binascii.hexlify(bin).decode("utf-8")
 
 
+# ==============================================================================
+# 流式输出处理（支持思考模式）
+# ==============================================================================
+
+
 class _ThinkStreamState:
+    """思考模式流式输出状态管理类。
+
+    用于处理支持思考模式的 LLM（如 DeepSeek R1）的流式输出，
+    识别思考标记（
+
+    Attributes:
+        full_text: 完整文本
+        last_idx: 上次处理到的索引位置
+        endswith_think: 是否以思考结束标记结尾
+        last_full: 上次完整文本
+        last_model_full: 上次模型完整文本
+        in_think: 是否在思考模式中
+        buffer: 缓冲区
+    """
     def __init__(self) -> None:
         self.full_text = ""
         self.last_idx = 0
@@ -1296,13 +1568,14 @@ class _ThinkStreamState:
 
 
 def _next_think_delta(state: _ThinkStreamState) -> str:
+    """从流式输出中提取下一个增量片段。
+
+    识别思考标记（
     full_text = state.full_text
     if full_text == state.last_full:
         return ""
     state.last_full = full_text
-    delta_ans = full_text[state.last_idx:]
-
-    if delta_ans.find("<think>") == 0:
+    delta_ans = full_text[state.last_idx:]<think>") == 0:
         state.last_idx += len("<think>")
         return "<think>"
     if delta_ans.find("<think>") > 0:

@@ -401,6 +401,7 @@ async def create():
         return server_error_response(e)
 
 
+# Web端知识库检索测试接口，POST /retrieval_test
 @manager.route('/retrieval_test', methods=['POST'])  # noqa: F821
 @login_required
 @validate_request("kb_id", "question")
@@ -422,12 +423,14 @@ async def retrieval_test():
     langs = req.get("cross_languages", [])
     user_id = current_user.id
 
+    # 检索核心逻辑，封装在内部函数中便于异常处理
     async def _retrieval():
         local_doc_ids = list(doc_ids) if doc_ids else []
         tenant_ids = []
 
         meta_data_filter = {}
         chat_mdl = None
+        # 元数据过滤配置：根据是否存在 search_id 决定从搜索配置或请求参数中获取过滤条件
         if req.get("search_id", ""):
             search_config = SearchService.get_detail(req.get("search_id", "")).get("search_config", {})
             meta_data_filter = search_config.get("meta_data_filter", {})
@@ -444,6 +447,7 @@ async def retrieval_test():
                 chat_model_config = get_tenant_default_model_by_type(user_id, LLMType.CHAT)
                 chat_mdl = LLMBundle(user_id, chat_model_config)
 
+        # 应用元数据过滤，根据过滤条件筛选出符合条件的文档ID
         if meta_data_filter:
             metas = DocMetadataService.get_flatted_meta_by_kbs(kb_ids)
             local_doc_ids = await apply_meta_data_filter(meta_data_filter, metas, question, chat_mdl, local_doc_ids)

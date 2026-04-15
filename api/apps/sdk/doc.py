@@ -1416,6 +1416,7 @@ async def switch_chunks(tenant_id, dataset_id, document_id):
         return server_error_response(e)
 
 
+# SDK检索接口，POST /retrieval，直接调用 settings.retriever.retrieval
 @manager.route("/retrieval", methods=["POST"])  # noqa: F821
 @token_required
 async def retrieval_test(tenant_id):
@@ -1499,24 +1500,32 @@ async def retrieval_test(tenant_id):
                     format: float
                     description: Similarity score.
     """
+    # 解析请求参数
     req = await get_request_json()
+    # 校验 dataset_ids 是否存在
     if not req.get("dataset_ids"):
         return get_error_data_result("`dataset_ids` is required.")
     kb_ids = req["dataset_ids"]
+    # 校验 dataset_ids 必须为列表类型
     if not isinstance(kb_ids, list):
         return get_error_data_result("`dataset_ids` should be a list")
+    # 逐个校验当前租户是否有权访问每个知识库
     for id in kb_ids:
         if not KnowledgebaseService.accessible(kb_id=id, user_id=tenant_id):
             return get_error_data_result(f"You don't own the dataset {id}.")
+    # 查询所有知识库实体
     kbs = KnowledgebaseService.get_by_ids(kb_ids)
+    # 提取各知识库的嵌入模型名称（去掉厂商后缀），确保所有知识库使用同一嵌入模型
     embd_nms = list(set([TenantLLMService.split_model_name_and_factory(kb.embd_id)[0] for kb in kbs]))  # remove vendor suffix for comparison
     if len(embd_nms) != 1:
         return get_result(
             message='Datasets use different embedding models."',
             code=RetCode.DATA_ERROR,
         )
+    # 校验 question 参数是否存在
     if "question" not in req:
         return get_error_data_result("`question` is required.")
+    # 解析分页参数
     page = int(req.get("page", 1))
     size = int(req.get("page_size", 30))
     question = req["question"]
