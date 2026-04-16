@@ -13,6 +13,19 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+知识库管理模块
+
+本模块提供知识库（Knowledge Base）相关的API接口，包括：
+- 知识库元数据设置更新
+- 知识库详情查询
+- 标签管理（列表、删除、重命名）
+- 元数据查询
+- 基础信息查询
+- 管道操作日志管理（列表、删除、详情）
+- 思维导图任务管理（运行、追踪、取消绑定）
+- 向量嵌入模型检查
+"""
 import logging
 import random
 import re
@@ -186,6 +199,19 @@ async def update():
 @login_required
 @validate_request("kb_id", "metadata")
 async def update_metadata_setting():
+    """
+    更新知识库元数据配置
+
+    功能：更新指定知识库的元数据配置，包括元数据字段定义和启用状态
+
+    参数：
+        - kb_id: 知识库ID
+        - metadata: 元数据配置信息
+        - enable_metadata: 是否启用元数据过滤（可选，默认True）
+
+    返回：
+        - 更新后的知识库配置信息
+    """
     req = await get_request_json()
     e, kb = KnowledgebaseService.get_by_id(req["kb_id"])
     if not e:
@@ -201,6 +227,17 @@ async def update_metadata_setting():
 @manager.route('/detail', methods=['GET'])  # noqa: F821
 @login_required
 def detail():
+    """
+    获取知识库详情
+
+    功能：查询指定知识库的详细信息，包括基本信息、大小、连接器等
+
+    参数：
+        - kb_id: 知识库ID
+
+    返回：
+        - 知识库详细信息（包含size、connectors等）
+    """
     kb_id = request.args["kb_id"]
     try:
         tenants = UserTenantService.query(user_id=current_user.id)
@@ -329,6 +366,17 @@ async def rm():
 @manager.route('/<kb_id>/tags', methods=['GET'])  # noqa: F821
 @login_required
 def list_tags(kb_id):
+    """
+    获取知识库标签列表
+
+    功能：查询指定知识库的所有标签
+
+    参数：
+        - kb_id: 知识库ID
+
+    返回：
+        - 标签列表
+    """
     if not KnowledgebaseService.accessible(kb_id, current_user.id):
         return get_json_result(
             data=False,
@@ -346,6 +394,17 @@ def list_tags(kb_id):
 @manager.route('/tags', methods=['GET'])  # noqa: F821
 @login_required
 def list_tags_from_kbs():
+    """
+    获取多个知识库的标签列表
+
+    功能：查询多个知识库的所有标签
+
+    参数：
+        - kb_ids: 知识库ID列表（逗号分隔）
+
+    返回：
+        - 标签列表
+    """
     kb_ids = request.args.get("kb_ids", "").split(",")
     for kb_id in kb_ids:
         if not KnowledgebaseService.accessible(kb_id, current_user.id):
@@ -365,6 +424,18 @@ def list_tags_from_kbs():
 @manager.route('/<kb_id>/rm_tags', methods=['POST'])  # noqa: F821
 @login_required
 async def rm_tags(kb_id):
+    """
+    删除知识库标签
+
+    功能：从指定知识库中删除指定的标签
+
+    参数：
+        - kb_id: 知识库ID
+        - tags: 要删除的标签列表
+
+    返回：
+        - 操作结果
+    """
     req = await get_request_json()
     if not KnowledgebaseService.accessible(kb_id, current_user.id):
         return get_json_result(
@@ -385,6 +456,19 @@ async def rm_tags(kb_id):
 @manager.route('/<kb_id>/rename_tag', methods=['POST'])  # noqa: F821
 @login_required
 async def rename_tags(kb_id):
+    """
+    重命名知识库标签
+
+    功能：将指定知识库中的某个标签重命名为新标签
+
+    参数：
+        - kb_id: 知识库ID
+        - from_tag: 原标签名称
+        - to_tag: 新标签名称
+
+    返回：
+        - 操作结果
+    """
     req = await get_request_json()
     if not KnowledgebaseService.accessible(kb_id, current_user.id):
         return get_json_result(
@@ -460,6 +544,17 @@ def delete_knowledge_graph(kb_id):
 @manager.route("/get_meta", methods=["GET"])  # noqa: F821
 @login_required
 def get_meta():
+    """
+    获取知识库元数据
+
+    功能：查询指定知识库的元数据字段信息
+
+    参数：
+        - kb_ids: 知识库ID列表（逗号分隔）
+
+    返回：
+        - 元数据字段信息
+    """
     kb_ids = request.args.get("kb_ids", "").split(",")
     for kb_id in kb_ids:
         if not KnowledgebaseService.accessible(kb_id, current_user.id):
@@ -474,6 +569,17 @@ def get_meta():
 @manager.route("/basic_info", methods=["GET"])  # noqa: F821
 @login_required
 def get_basic_info():
+    """
+    获取知识库基础信息
+
+    功能：查询指定知识库的基础统计信息
+
+    参数：
+        - kb_id: 知识库ID
+
+    返回：
+        - 知识库基础信息（文档数量、token数量等）
+    """
     kb_id = request.args.get("kb_id", "")
     if not KnowledgebaseService.accessible(kb_id, current_user.id):
         return get_json_result(
@@ -490,6 +596,27 @@ def get_basic_info():
 @manager.route("/list_pipeline_logs", methods=["POST"])  # noqa: F821
 @login_required
 async def list_pipeline_logs():
+    """
+    获取知识库管道操作日志
+
+    功能：查询知识库的文件处理操作日志，支持多种过滤条件
+
+    参数：
+        - kb_id: 知识库ID
+        - keywords: 关键词搜索
+        - page: 页码
+        - page_size: 每页数量
+        - orderby: 排序字段
+        - desc: 是否降序
+        - operation_status: 操作状态过滤
+        - types: 文件类型过滤
+        - suffix: 文件后缀过滤
+        - create_date_from: 创建日期起始
+        - create_date_to: 创建日期结束
+
+    返回：
+        - 日志列表和总数
+    """
     kb_id = request.args.get("kb_id")
     if not kb_id:
         return get_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
@@ -534,6 +661,24 @@ async def list_pipeline_logs():
 @manager.route("/list_pipeline_dataset_logs", methods=["POST"])  # noqa: F821
 @login_required
 async def list_pipeline_dataset_logs():
+    """
+    获取知识库数据集操作日志
+
+    功能：查询知识库的数据集级别操作日志
+
+    参数：
+        - kb_id: 知识库ID
+        - page: 页码
+        - page_size: 每页数量
+        - orderby: 排序字段
+        - desc: 是否降序
+        - operation_status: 操作状态过滤
+        - create_date_from: 创建日期起始
+        - create_date_to: 创建日期结束
+
+    返回：
+        - 日志列表和总数
+    """
     kb_id = request.args.get("kb_id")
     if not kb_id:
         return get_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
@@ -568,6 +713,18 @@ async def list_pipeline_dataset_logs():
 @manager.route("/delete_pipeline_logs", methods=["POST"])  # noqa: F821
 @login_required
 async def delete_pipeline_logs():
+    """
+    删除管道操作日志
+
+    功能：批量删除指定的操作日志
+
+    参数：
+        - kb_id: 知识库ID
+        - log_ids: 日志ID列表
+
+    返回：
+        - 操作结果
+    """
     kb_id = request.args.get("kb_id")
     if not kb_id:
         return get_json_result(data=False, message='Lack of "KB ID"', code=RetCode.ARGUMENT_ERROR)
@@ -583,6 +740,17 @@ async def delete_pipeline_logs():
 @manager.route("/pipeline_log_detail", methods=["GET"])  # noqa: F821
 @login_required
 def pipeline_log_detail():
+    """
+    获取管道操作日志详情
+
+    功能：查询单个操作日志的详细信息
+
+    参数：
+        - log_id: 日志ID
+
+    返回：
+        - 日志详细信息
+    """
     log_id = request.args.get("log_id")
     if not log_id:
         return get_json_result(data=False, message='Lack of "Pipeline log ID"', code=RetCode.ARGUMENT_ERROR)
@@ -737,6 +905,17 @@ def trace_raptor():
 @manager.route("/run_mindmap", methods=["POST"])  # noqa: F821
 @login_required
 async def run_mindmap():
+    """
+    运行思维导图任务
+
+    功能：为知识库启动思维导图生成任务
+
+    参数：
+        - kb_id: 知识库ID
+
+    返回：
+        - 任务ID
+    """
     req = await get_request_json()
 
     kb_id = req.get("kb_id", "")
@@ -784,6 +963,17 @@ async def run_mindmap():
 @manager.route("/trace_mindmap", methods=["GET"])  # noqa: F821
 @login_required
 def trace_mindmap():
+    """
+    追踪思维导图任务
+
+    功能：查询思维导图生成任务的执行状态
+
+    参数：
+        - kb_id: 知识库ID
+
+    返回：
+        - 任务状态信息
+    """
     kb_id = request.args.get("kb_id", "")
     if not kb_id:
         return get_error_data_result(message='Lack of "KB ID"')
@@ -806,6 +996,18 @@ def trace_mindmap():
 @manager.route("/unbind_task", methods=["DELETE"])  # noqa: F821
 @login_required
 def delete_kb_task():
+    """
+    取消并解绑知识库任务
+
+    功能：取消正在运行的任务并解绑任务ID，支持GraphRAG、RAPTOR、思维导图任务
+
+    参数：
+        - kb_id: 知识库ID
+        - pipeline_task_type: 任务类型（graph_rag、raptor、mindmap）
+
+    返回：
+        - 操作结果
+    """
     kb_id = request.args.get("kb_id", "")
     if not kb_id:
         return get_error_data_result(message='Lack of "KB ID"')
@@ -853,6 +1055,20 @@ def delete_kb_task():
 @manager.route("/check_embedding", methods=["post"])  # noqa: F821
 @login_required
 async def check_embedding():
+    """
+    检查向量嵌入模型兼容性
+
+    功能：验证新的嵌入模型与现有向量的兼容性，通过计算余弦相似度判断
+
+    参数：
+        - kb_id: 知识库ID
+        - tenant_embd_id: 租户嵌入模型ID（可选）
+        - embd_id: 嵌入模型ID（可选）
+        - check_num: 抽样检查数量（默认5）
+
+    返回：
+        - 检查结果摘要（平均相似度、最小/最大相似度）和详细结果
+    """
 
     def _guess_vec_field(src: dict) -> str | None:
         for k in src or {}:

@@ -13,6 +13,15 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+MCP（Model Context Protocol）服务器管理应用模块
+
+本模块提供 MCP 服务器的管理接口，包括：
+- MCP 服务器列表查询、创建、更新、删除
+- MCP 服务器导入导出
+- MCP 工具列表查询和测试
+- MCP 服务器连接测试
+"""
 from quart import Response, request
 from api.apps import current_user, login_required
 
@@ -29,6 +38,22 @@ from common.mcp_tool_call_conn import MCPToolCallSession, close_multiple_mcp_too
 @manager.route("/list", methods=["POST"])  # noqa: F821
 @login_required
 async def list_mcp() -> Response:
+    """
+    获取 MCP 服务器列表
+
+    查询参数：
+        - keywords: 搜索关键词（可选）
+        - page: 页码（可选）
+        - page_size: 每页数量（可选）
+        - orderby: 排序字段（默认：create_time）
+        - desc: 是否降序（默认：true）
+
+    请求体：
+        - mcp_ids: 要查询的 MCP 服务器 ID 列表（可选）
+
+    Returns:
+        MCP 服务器列表和总数
+    """
     keywords = request.args.get("keywords", "")
     page_number = int(request.args.get("page", 0))
     items_per_page = int(request.args.get("page_size", 0))
@@ -55,6 +80,15 @@ async def list_mcp() -> Response:
 @manager.route("/detail", methods=["GET"])  # noqa: F821
 @login_required
 def detail() -> Response:
+    """
+    获取 MCP 服务器详细信息
+
+    查询参数：
+        - mcp_id: MCP 服务器 ID
+
+    Returns:
+        MCP 服务器详细信息
+    """
     mcp_id = request.args["mcp_id"]
     try:
         mcp_server = MCPServerService.get_or_none(id=mcp_id, tenant_id=current_user.id)
@@ -71,6 +105,20 @@ def detail() -> Response:
 @login_required
 @validate_request("name", "url", "server_type")
 async def create() -> Response:
+    """
+    创建新的 MCP 服务器
+
+    请求体：
+        - name: 服务器名称
+        - url: 服务器 URL
+        - server_type: 服务器类型
+        - headers: HTTP 请求头（可选）
+        - variables: 服务器变量（可选）
+        - timeout: 超时时间（可选，默认 10）
+
+    Returns:
+        创建的 MCP 服务器信息
+    """
     req = await get_request_json()
 
     server_type = req.get("server_type", "")
@@ -126,6 +174,21 @@ async def create() -> Response:
 @login_required
 @validate_request("mcp_id")
 async def update() -> Response:
+    """
+    更新 MCP 服务器配置
+
+    请求体：
+        - mcp_id: MCP 服务器 ID
+        - name: 服务器名称（可选）
+        - url: 服务器 URL（可选）
+        - server_type: 服务器类型（可选）
+        - headers: HTTP 请求头（可选）
+        - variables: 服务器变量（可选）
+        - timeout: 超时时间（可选）
+
+    Returns:
+        更新后的 MCP 服务器信息
+    """
     req = await get_request_json()
 
     mcp_id = req.get("mcp_id", "")
@@ -182,6 +245,15 @@ async def update() -> Response:
 @login_required
 @validate_request("mcp_ids")
 async def rm() -> Response:
+    """
+    删除 MCP 服务器
+
+    请求体：
+        - mcp_ids: 要删除的 MCP 服务器 ID 列表
+
+    Returns:
+        成功时返回 True
+    """
     req = await get_request_json()
     mcp_ids = req.get("mcp_ids", [])
 
@@ -200,6 +272,16 @@ async def rm() -> Response:
 @login_required
 @validate_request("mcpServers")
 async def import_multiple() -> Response:
+    """
+    批量导入 MCP 服务器
+
+    请求体：
+        - mcpServers: MCP 服务器配置字典，key 为服务器名，value 为配置
+        - timeout: 超时时间（可选）
+
+    Returns:
+        导入结果列表，包含每个服务器的导入状态
+    """
     req = await get_request_json()
     servers = req.get("mcpServers", {})
     if not servers:
@@ -267,6 +349,15 @@ async def import_multiple() -> Response:
 @login_required
 @validate_request("mcp_ids")
 async def export_multiple() -> Response:
+    """
+    批量导出 MCP 服务器配置
+
+    请求体：
+        - mcp_ids: 要导出的 MCP 服务器 ID 列表
+
+    Returns:
+        MCP 服务器配置字典
+    """
     req = await get_request_json()
     mcp_ids = req.get("mcp_ids", [])
 
@@ -299,6 +390,16 @@ async def export_multiple() -> Response:
 @login_required
 @validate_request("mcp_ids")
 async def list_tools() -> Response:
+    """
+    获取 MCP 服务器的工具列表
+
+    请求体：
+        - mcp_ids: MCP 服务器 ID 列表
+        - timeout: 超时时间（可选）
+
+    Returns:
+        按服务器 ID 分组的工具列表
+    """
     req = await get_request_json()
     mcp_ids = req.get("mcp_ids", [])
     if not mcp_ids:
@@ -345,6 +446,18 @@ async def list_tools() -> Response:
 @login_required
 @validate_request("mcp_id", "tool_name", "arguments")
 async def test_tool() -> Response:
+    """
+    测试 MCP 工具调用
+
+    请求体：
+        - mcp_id: MCP 服务器 ID
+        - tool_name: 工具名称
+        - arguments: 工具参数
+        - timeout: 超时时间（可选）
+
+    Returns:
+        工具调用结果
+    """
     req = await get_request_json()
     mcp_id = req.get("mcp_id", "")
     if not mcp_id:
@@ -378,6 +491,16 @@ async def test_tool() -> Response:
 @login_required
 @validate_request("mcp_id", "tools")
 async def cache_tool() -> Response:
+    """
+    缓存 MCP 服务器的工具配置
+
+    请求体：
+        - mcp_id: MCP 服务器 ID
+        - tools: 工具配置列表
+
+    Returns:
+        更新后的工具配置
+    """
     req = await get_request_json()
     mcp_id = req.get("mcp_id", "")
     if not mcp_id:
@@ -401,6 +524,19 @@ async def cache_tool() -> Response:
 @manager.route("/test_mcp", methods=["POST"])  # noqa: F821
 @validate_request("url", "server_type")
 async def test_mcp() -> Response:
+    """
+    测试 MCP 服务器连接
+
+    请求体：
+        - url: MCP 服务器 URL
+        - server_type: 服务器类型
+        - headers: HTTP 请求头（可选）
+        - variables: 服务器变量（可选）
+        - timeout: 超时时间（可选）
+
+    Returns:
+        服务器提供的工具列表
+    """
     req = await get_request_json()
 
     url = req.get("url", "")

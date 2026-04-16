@@ -13,6 +13,18 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+Document RESTful API 模块
+
+本模块提供文档（Document）相关的 RESTful API 接口，包括：
+- 更新文档信息
+- 查询文档元数据摘要
+
+主要功能：
+- 文档名称、分块方法、解析器配置、启用状态等字段的更新
+- 文档元数据的批量更新
+- 数据集级别的文档元数据摘要统计
+"""
 import logging
 
 from quart import request

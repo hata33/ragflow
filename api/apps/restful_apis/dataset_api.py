@@ -13,6 +13,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+Dataset RESTful API 模块
+
+本模块提供数据集（Dataset）相关的 RESTful API 接口，包括：
+- 创建数据集
+- 删除数据集（支持批量删除）
+- 更新数据集配置
+- 查询数据集列表
+- 知识图谱管理
+- GraphRAG 和 RAPTOR 功能
+- 自动元数据配置
+
+主要功能：
+- 数据集的 CRUD 操作
+- 知识图谱的构建、查询和删除
+- GraphRAG 和 RAPTOR 算法的执行和追踪
+- 数据集的自动元数据配置管理
+"""
 import logging
 
 from peewee import OperationalError
@@ -353,6 +371,17 @@ async def knowledge_graph(tenant_id, dataset_id):
 @login_required
 @add_tenant_id_to_kwargs
 def delete_knowledge_graph(tenant_id, dataset_id):
+    """
+    删除数据集的知识图谱 (DELETE /datasets/<dataset_id>/knowledge_graph)。
+
+    删除指定数据集的知识图谱数据，清空图谱中的所有实体和关系。
+
+    Args:
+        dataset_id: 数据集 ID
+
+    Returns:
+        返回删除操作的结果
+    """
     try:
         success, result = dataset_api_service.delete_knowledge_graph(dataset_id, tenant_id)
         if success:
@@ -372,6 +401,18 @@ def delete_knowledge_graph(tenant_id, dataset_id):
 @login_required
 @add_tenant_id_to_kwargs
 async def run_graphrag(tenant_id, dataset_id):
+    """
+    运行 GraphRAG 算法 (POST /datasets/<dataset_id>/run_graphrag)。
+
+    对指定数据集执行 GraphRAG（基于图的检索增强生成）算法，
+    构建知识图谱并生成实体和关系的向量表示。
+
+    Args:
+        dataset_id: 数据集 ID
+
+    Returns:
+        返回 GraphRAG 执行结果
+    """
     try:
         success, result = dataset_api_service.run_graphrag(dataset_id, tenant_id)
         if success:
@@ -387,6 +428,17 @@ async def run_graphrag(tenant_id, dataset_id):
 @login_required
 @add_tenant_id_to_kwargs
 def trace_graphrag(tenant_id, dataset_id):
+    """
+    追踪 GraphRAG 执行状态 (GET /datasets/<dataset_id>/trace_graphrag)。
+
+    查询指定数据集的 GraphRAG 算法执行状态和进度信息。
+
+    Args:
+        dataset_id: 数据集 ID
+
+    Returns:
+        返回 GraphRAG 执行状态信息
+    """
     try:
         success, result = dataset_api_service.trace_graphrag(dataset_id, tenant_id)
         if success:
@@ -402,6 +454,18 @@ def trace_graphrag(tenant_id, dataset_id):
 @login_required
 @add_tenant_id_to_kwargs
 async def run_raptor(tenant_id, dataset_id):
+    """
+    运行 RAPTOR 算法 (POST /datasets/<dataset_id>/run_raptor)。
+
+    对指定数据集执行 RAPTOR（递归抽象处理树组织）算法，
+    构建文档的层次化聚类树结构以提升检索效果。
+
+    Args:
+        dataset_id: 数据集 ID
+
+    Returns:
+        返回 RAPTOR 执行结果
+    """
     try:
         success, result = dataset_api_service.run_raptor(dataset_id, tenant_id)
         if success:
@@ -417,6 +481,17 @@ async def run_raptor(tenant_id, dataset_id):
 @login_required
 @add_tenant_id_to_kwargs
 def trace_raptor(tenant_id, dataset_id):
+    """
+    追踪 RAPTOR 执行状态 (GET /datasets/<dataset_id>/trace_raptor)。
+
+    查询指定数据集的 RAPTOR 算法执行状态和进度信息。
+
+    Args:
+        dataset_id: 数据集 ID
+
+    Returns:
+        返回 RAPTOR 执行状态信息
+    """
     try:
         success, result = dataset_api_service.trace_raptor(dataset_id, tenant_id)
         if success:

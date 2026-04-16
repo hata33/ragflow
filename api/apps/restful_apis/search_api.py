@@ -13,7 +13,22 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+Search RESTful API 模块
 
+本模块提供搜索应用（Search）相关的 RESTful API 接口，包括：
+- 创建搜索应用
+- 查询搜索应用列表
+- 获取搜索应用详情
+- 更新搜索应用配置
+- 删除搜索应用
+
+主要功能：
+- 搜索应用的 CRUD 操作
+- 支持按名称、关键词、所有者过滤
+- 支持分页和排序
+- 搜索配置管理
+"""
 from quart import request
 from api.apps import current_user, login_required
 
@@ -31,6 +46,19 @@ from api.utils.api_utils import get_data_error_result, get_json_result, get_requ
 @login_required
 @validate_request("name")
 async def create():
+    """
+    创建搜索应用 (POST /searches)。
+
+    创建一个新的搜索应用，用于配置和管理搜索功能。
+    需要提供搜索应用的名称，其他配置项可选。
+
+    Args:
+        name: 搜索应用名称（必填）
+        description: 搜索应用描述（可选）
+
+    Returns:
+        返回创建的搜索应用 ID
+    """
     req = await get_request_json()
     search_name = req["name"]
     description = req.get("description", "")
@@ -64,6 +92,22 @@ async def create():
 @manager.route("/searches", methods=["GET"])  # noqa: F821
 @login_required
 def list_searches():
+    """
+    查询搜索应用列表 (GET /searches)。
+
+    根据过滤条件和关键词查询搜索应用列表，支持分页和排序。
+
+    Args:
+        keywords: 搜索关键词（可选）
+        page: 页码（可选，默认 0）
+        page_size: 每页数量（可选，默认 0）
+        orderby: 排序字段（可选，默认 create_time）
+        desc: 是否降序（可选，默认 true）
+        owner_ids: 所有者 ID 列表（可选）
+
+    Returns:
+        返回搜索应用列表和总数
+    """
     keywords = request.args.get("keywords", "")
     page_number = int(request.args.get("page", 0))
     items_per_page = int(request.args.get("page_size", 0))
@@ -89,6 +133,17 @@ def list_searches():
 @manager.route("/searches/<search_id>", methods=["GET"])  # noqa: F821
 @login_required
 def detail(search_id):
+    """
+    获取搜索应用详情 (GET /searches/<search_id>)。
+
+    查询指定搜索应用的详细配置信息。
+
+    Args:
+        search_id: 搜索应用 ID
+
+    Returns:
+        返回搜索应用的详细信息
+    """
     try:
         tenants = UserTenantService.query(user_id=current_user.id)
         for tenant in tenants:
@@ -109,6 +164,19 @@ def detail(search_id):
 @login_required
 @validate_request("name", "search_config")
 async def update(search_id):
+    """
+    更新搜索应用配置 (PUT /searches/<search_id>)。
+
+    更新指定搜索应用的配置信息，包括名称和搜索配置。
+
+    Args:
+        search_id: 搜索应用 ID
+        name: 搜索应用名称（必填）
+        search_config: 搜索配置（必填）
+
+    Returns:
+        返回更新后的搜索应用信息
+    """
     req = await get_request_json()
     if not isinstance(req["name"], str):
         return get_data_error_result(message="Search name must be string.")
@@ -159,6 +227,17 @@ async def update(search_id):
 @manager.route("/searches/<search_id>", methods=["DELETE"])  # noqa: F821
 @login_required
 def delete_search(search_id):
+    """
+    删除搜索应用 (DELETE /searches/<search_id>)。
+
+    删除指定的搜索应用。
+
+    Args:
+        search_id: 搜索应用 ID
+
+    Returns:
+        返回删除操作的结果
+    """
     if not SearchService.accessible4deletion(search_id, current_user.id):
         return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
 

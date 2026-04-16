@@ -15,14 +15,15 @@
 #
 
 """
-RAG Evaluation API Endpoints
+RAG评估应用API端点模块
 
-Provides REST API for RAG evaluation functionality including:
-- Dataset management
-- Test case management
-- Evaluation execution
-- Results retrieval
-- Configuration recommendations
+提供RAG系统评估的REST API功能，包括：
+- 评估数据集管理
+- 测试用例管理
+- 评估执行
+- 结果检索与分析
+- 配置推荐
+- 实时单问题评估
 """
 
 from quart import request

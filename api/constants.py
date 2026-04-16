@@ -13,6 +13,17 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+"""
+RAGFlow 常量定义模块
+
+该模块定义了系统中使用的各种常量，包括：
+- 名称长度限制
+- API 版本
+- 文件大小限制
+- 各种配置限制
+"""
+
+# 名称长度限制（1024字符）
 NAME_LENGTH_LIMIT = 2**10
 
 IMG_BASE64_PREFIX = "data:image/png;base64,"

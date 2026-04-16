@@ -14,6 +14,19 @@
 #  limitations under the License.
 #
 
+"""
+API 工具函数模块
+
+该模块提供 API 开发中常用的工具函数和装饰器。
+
+主要功能：
+- 请求参数验证和解析
+- 统一的响应格式生成
+- 错误处理和响应
+- JSON 序列化辅助函数
+- 认证和权限检查装饰器
+"""
+
 import asyncio
 import functools
 import inspect
@@ -54,13 +67,38 @@ from common.misc_utils import thread_pool_exec
 requests.models.complexjson.dumps = functools.partial(json.dumps, cls=CustomJSONEncoder)
 
 def _safe_jsonify(payload: dict):
+    """
+    安全地将字典转换为 JSON 响应
+
+    如果在应用上下文中，使用 Quart 的 jsonify；
+    否则直接返回字典。
+
+    参数：
+        payload: 要转换的字典
+
+    返回：
+        JSON 响应对象或原始字典
+    """
     if has_app_context():
         return jsonify(payload)
     return payload
 
 
 async def _coerce_request_data() -> dict:
-    """Fetch JSON body with sane defaults; fallback to form data."""
+    """
+    获取请求数据并转换为字典格式
+
+    智能解析请求体：
+    - 优先解析为 JSON
+    - 如果不是 JSON，则尝试解析表单数据
+
+    返回：
+        解析后的请求数据字典
+
+    异常：
+        AttributeError: 如果 JSON 载荷不是对象类型
+        TypeError: 如果请求体格式无效
+    """
     if hasattr(request, "_cached_payload"):
         return request._cached_payload
     payload: Any = None
@@ -90,12 +128,26 @@ async def _coerce_request_data() -> dict:
     return payload
 
 async def get_request_json():
+    """
+    获取请求的 JSON 数据
+
+    返回：
+        解析后的请求数据字典
+    """
     return await _coerce_request_data()
+
 
 def serialize_for_json(obj):
     """
-    Recursively serialize objects to make them JSON serializable.
-    Handles ModelMetaclass and other non-serializable objects.
+    递归序列化对象使其可被 JSON 序列化
+
+    处理 ModelMetaclass 和其他不可序列化的对象。
+
+    参数：
+        obj: 要序列化的对象
+
+    返回：
+        可被 JSON 序列化的对象
     """
     if hasattr(obj, "__dict__"):
         # For objects with __dict__, try to serialize their attributes
@@ -118,6 +170,18 @@ def serialize_for_json(obj):
 
 
 def get_data_error_result(code=RetCode.DATA_ERROR, message="Sorry! Data missing!"):
+    """
+    生成数据错误响应
+
+    记录错误日志并返回标准化的错误响应。
+
+    参数：
+        code: 错误码（默认：RetCode.DATA_ERROR）
+        message: 错误消息（默认："Sorry! Data missing!"）
+
+    返回：
+        JSON 响应对象，包含错误码和错误消息
+    """
     if sys.exc_info()[0] is not None:
         logging.exception(message)
     else:
@@ -133,6 +197,18 @@ def get_data_error_result(code=RetCode.DATA_ERROR, message="Sorry! Data missing!
 
 
 def server_error_response(e):
+    """
+    生成服务器错误响应
+
+    Quart 在原始 except 块之外调用此处理程序，
+    因此必须手动传递 exc_info。
+
+    参数：
+        e: 异常对象
+
+    返回：
+        JSON 响应对象，包含错误信息
+    """
     # Quart invokes this handler outside the original except block, so we must pass exc_info manually.
     logging.error("Unhandled exception during request", exc_info=(type(e), e, e.__traceback__))
     try:

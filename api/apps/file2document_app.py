@@ -14,6 +14,15 @@
 #  limitations under the License
 #
 
+"""
+文件到文档（File2Document）转换API端点模块
+
+提供文件与知识库文档之间转换的REST API功能，包括：
+- 文件转换：将文件添加到知识库并创建文档
+- 文件移除：从知识库中移除文件关联的文档
+- 支持文件夹批量转换
+"""
+
 import asyncio
 import logging
 from pathlib import Path
@@ -31,7 +40,14 @@ from api.db.services.document_service import DocumentService
 
 
 def _convert_files(file_ids, kb_ids, user_id):
-    """Synchronous worker: delete old docs and insert new ones for the given file/kb pairs."""
+    """
+    同步工作线程：删除旧文档并为给定的文件/知识库对插入新文档
+
+    Args:
+        file_ids: 文件ID列表
+        kb_ids: 知识库ID列表
+        user_id: 用户ID
+    """
     for id in file_ids:
         informs = File2DocumentService.get_by_file_id(id)
         for inform in informs:
@@ -78,6 +94,22 @@ def _convert_files(file_ids, kb_ids, user_id):
 @login_required
 @validate_request("file_ids", "kb_ids")
 async def convert():
+    """
+    将文件转换并添加到知识库
+
+    Args:
+        file_ids: 文件ID列表（支持文件夹）
+        kb_ids: 知识库ID列表
+
+    Returns:
+        JSON响应，转换成功返回True
+
+    Note:
+        - 会先删除文件与知识库的旧关联
+        - 然后为每个知识库创建新文档
+        - 支持文件夹批量转换
+        - 在后台线程执行，避免阻塞事件循环
+    """
     req = await get_request_json()
     kb_ids = req["kb_ids"]
     file_ids = req["file_ids"]
@@ -124,6 +156,20 @@ async def convert():
 @login_required
 @validate_request("file_ids")
 async def rm():
+    """
+    从知识库中移除文件及其关联的文档
+
+    Args:
+        file_ids: 文件ID列表
+
+    Returns:
+        JSON响应，移除成功返回True
+
+    Note:
+        - 删除文件与文档的关联关系
+        - 删除知识库中的文档
+        - 删除文档的向量数据
+    """
     req = await get_request_json()
     file_ids = req["file_ids"]
     if not file_ids:

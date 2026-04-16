@@ -13,6 +13,15 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+LLM 模型管理应用模块
+
+本模块提供大语言模型（LLM）的管理接口，包括：
+- LLM 厂商和模型列表查询
+- API 密钥配置和验证
+- 模型添加、删除、启用/禁用
+- 支持多种模型类型：聊天、嵌入、重排序、图像识别、语音合成、OCR、语音转文字
+"""
 import asyncio
 import logging
 import json
@@ -32,6 +41,12 @@ from rag.llm import EmbeddingModel, ChatModel, RerankModel, CvModel, TTSModel, O
 @manager.route("/factories", methods=["GET"])  # noqa: F821
 @login_required
 def factories():
+    """
+    获取可用的 LLM 厂商列表
+
+    Returns:
+        包含厂商名称、描述和支持的模型类型的列表
+    """
     try:
         fac = get_allowed_llm_factories()
         fac = [f.to_dict() for f in fac if f.name not in ["Youdao", "FastEmbed", "BAAI", "Builtin", "siliconflow_intl"]]
@@ -60,6 +75,18 @@ def factories():
 @login_required
 @validate_request("llm_factory", "api_key")
 async def set_api_key():
+    """
+    设置 LLM 厂商的 API 密钥并验证
+
+    请求体：
+        - llm_factory: LLM 厂商名称
+        - api_key: API 密钥
+        - base_url: 自定义 API 基础 URL（可选）
+        - verify: 是否仅验证而不保存（可选）
+
+    Returns:
+        成功时返回 True，失败时返回错误信息
+    """
     req = await get_request_json()
     # test if api key works
     chat_passed, embd_passed, rerank_passed = False, False, False
@@ -160,6 +187,21 @@ async def set_api_key():
 @login_required
 @validate_request("llm_factory")
 async def add_llm():
+    """
+    添加新的 LLM 模型配置
+
+    请求体：
+        - llm_factory: LLM 厂商名称
+        - model_type: 模型类型（chat/embedding/rerank/image2text/tts/ocr/speech2text）
+        - llm_name: 模型名称
+        - api_key: API 密钥
+        - api_base: API 基础 URL（可选）
+        - max_tokens: 最大令牌数（可选）
+        - verify: 是否仅验证而不保存（可选）
+
+    Returns:
+        成功时返回 True，失败时返回错误信息
+    """
     req = await get_request_json()
     factory = req["llm_factory"]
     api_key = req.get("api_key", "x")
@@ -360,6 +402,16 @@ async def add_llm():
 @login_required
 @validate_request("llm_factory", "llm_name")
 async def delete_llm():
+    """
+    删除指定的 LLM 模型配置
+
+    请求体：
+        - llm_factory: LLM 厂商名称
+        - llm_name: 模型名称
+
+    Returns:
+        成功时返回 True
+    """
     req = await get_request_json()
     TenantLLMService.filter_delete([TenantLLM.tenant_id == current_user.id, TenantLLM.llm_factory == req["llm_factory"], TenantLLM.llm_name == req["llm_name"]])
     return get_json_result(data=True)
@@ -369,6 +421,17 @@ async def delete_llm():
 @login_required
 @validate_request("llm_factory", "llm_name")
 async def enable_llm():
+    """
+    启用或禁用指定的 LLM 模型
+
+    请求体：
+        - llm_factory: LLM 厂商名称
+        - llm_name: 模型名称
+        - status: 状态（1=启用，0=禁用）
+
+    Returns:
+        成功时返回 True
+    """
     req = await get_request_json()
     TenantLLMService.filter_update(
         [TenantLLM.tenant_id == current_user.id, TenantLLM.llm_factory == req["llm_factory"], TenantLLM.llm_name == req["llm_name"]], {"status": str(req.get("status", "1"))}
@@ -380,6 +443,15 @@ async def enable_llm():
 @login_required
 @validate_request("llm_factory")
 async def delete_factory():
+    """
+    删除指定厂商的所有模型配置
+
+    请求体：
+        - llm_factory: LLM 厂商名称
+
+    Returns:
+        成功时返回 True
+    """
     req = await get_request_json()
     TenantLLMService.filter_delete([TenantLLM.tenant_id == current_user.id, TenantLLM.llm_factory == req["llm_factory"]])
     return get_json_result(data=True)
@@ -388,6 +460,15 @@ async def delete_factory():
 @manager.route("/my_llms", methods=["GET"])  # noqa: F821
 @login_required
 def my_llms():
+    """
+    获取当前用户配置的所有 LLM 模型
+
+    查询参数：
+        - include_details: 是否包含详细信息（true/false）
+
+    Returns:
+        按厂商分组的模型列表
+    """
     try:
         TenantLLMService.ensure_mineru_from_env(current_user.id)
         include_details = request.args.get("include_details", "false").lower() == "true"
@@ -434,6 +515,15 @@ def my_llms():
 @manager.route("/list", methods=["GET"])  # noqa: F821
 @login_required
 async def list_app():
+    """
+    获取可用的 LLM 模型列表
+
+    查询参数：
+        - model_type: 过滤模型类型（可选）
+
+    Returns:
+        按厂商分组的可用模型列表，包含可用性状态
+    """
     self_deployed = ["FastEmbed", "Ollama", "Xinference", "LocalAI", "LM-Studio", "GPUStack"]
     weighted = []
     model_type = request.args.get("model_type")

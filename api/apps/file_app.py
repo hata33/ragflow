@@ -13,6 +13,23 @@
 # #  See the License for the specific language governing permissions and
 # #  limitations under the License
 # #
+#
+# """
+# 文件（File）应用API端点模块
+#
+# 提供文件管理的REST API功能，包括：
+# - 文件上传
+# - 文件夹创建
+# - 文件列表查询
+# - 文件重命名
+# - 文件删除
+# - 文件移动
+# - 文件下载
+# - 根文件夹和父文件夹查询
+#
+# Note: 此模块当前已被注释，功能已迁移到其他模块
+# """
+#
 # import logging
 # import os
 # import pathlib

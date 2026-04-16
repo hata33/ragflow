@@ -13,6 +13,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""记忆（Memory）API 服务模块
+
+该模块提供了记忆管理的核心功能，包括记忆的创建、更新、删除、查询，
+以及消息的管理、搜索和遗忘等功能。
+"""
+
 from api.apps import current_user
 from api.db import TenantPermission
 from api.db.services.memory_service import MemoryService
@@ -30,15 +36,19 @@ from common.time_utils import current_timestamp, timestamp_to_date
 
 
 async def create_memory(memory_info: dict):
-    """
-    :param memory_info: {
-        "name": str,
-        "memory_type": list[str],
-        "embd_id": str,
-        "llm_id": str,
-        "tenant_embd_id": str,
-        "tenant_llm_id": str
-    }
+    """创建新记忆
+
+    Args:
+        memory_info: 记忆信息字典，包含：
+            - name: 记忆名称
+            - memory_type: 记忆类型列表
+            - embd_id: 嵌入模型 ID
+            - llm_id: LLM 模型 ID
+            - tenant_embd_id: 租户默认嵌入模型 ID
+            - tenant_llm_id: 租户默认 LLM 模型 ID
+
+    Returns:
+        (成功标志, 记忆信息) 或 (成功标志, 错误信息)
     """
     # check name length
     name = memory_info["name"]
@@ -71,22 +81,26 @@ async def create_memory(memory_info: dict):
 
 
 async def update_memory(memory_id: str, new_memory_setting: dict):
-    """
-    :param memory_id: str
-    :param new_memory_setting: {
-        "name": str,
-        "permissions": str,
-        "llm_id": str,
-        "embd_id": str,
-        "memory_type": list[str],
-        "memory_size": int,
-        "forgetting_policy": str,
-        "temperature": float,
-        "avatar": str,
-        "description": str,
-        "system_prompt": str,
-        "user_prompt": str
-    }
+    """更新记忆设置
+
+    Args:
+        memory_id: 记忆 ID
+        new_memory_setting: 新的记忆设置，包含：
+            - name: 记忆名称
+            - permissions: 权限
+            - llm_id: LLM 模型 ID
+            - embd_id: 嵌入模型 ID
+            - memory_type: 记忆类型列表
+            - memory_size: 记忆大小
+            - forgetting_policy: 遗忘策略
+            - temperature: 温度参数
+            - avatar: 头像
+            - description: 描述
+            - system_prompt: 系统提示词
+            - user_prompt: 用户提示词
+
+    Returns:
+        (成功标志, 记忆信息) 或 (成功标志, 错误信息)
     """
     update_dict = {}
     # check name length
@@ -178,15 +192,19 @@ async def delete_memory(memory_id):
 
 
 async def list_memory(filter_params: dict, keywords: str, page: int=1, page_size: int = 50):
-    """
-    :param filter_params: {
-        "memory_type": list[str],
-        "tenant_id": list[str],
-        "storage_type": str
-    }
-    :param keywords: str
-    :param page: int
-    :param page_size: int
+    """列出记忆
+
+    Args:
+        filter_params: 过滤参数，包含：
+            - memory_type: 记忆类型列表
+            - tenant_id: 租户 ID 列表
+            - storage_type: 存储类型
+        keywords: 关键词
+        page: 页码
+        page_size: 每页大小
+
+    Returns:
+        包含记忆列表和总数的字典
     """
     filter_dict: dict = {"storage_type": filter_params.get("storage_type")}
     tenant_ids = filter_params.get("tenant_id")
@@ -218,6 +236,18 @@ async def get_memory_config(memory_id):
 
 
 async def get_memory_messages(memory_id, agent_ids: list[str], keywords: str, page: int=1, page_size: int = 50):
+    """获取记忆的消息列表
+
+    Args:
+        memory_id: 记忆 ID
+        agent_ids: Agent ID 列表
+        keywords: 关键词
+        page: 页码
+        page_size: 每页大小
+
+    Returns:
+        包含消息列表和存储类型的字典
+    """
     memory = MemoryService.get_by_memory_id(memory_id)
     if not memory:
         raise NotFoundException(f"Memory '{memory_id}' not found.")
@@ -243,15 +273,19 @@ async def get_memory_messages(memory_id, agent_ids: list[str], keywords: str, pa
 
 
 async def add_message(memory_ids: list[str], message_dict: dict):
-    """
-    :param memory_ids: list[str]
-    :param message_dict: {
-        "agent_id": str,
-        "session_id": str,
-        "user_input": str,
-        "agent_response": str,
-        "message_type": str
-    }
+    """向记忆添加消息
+
+    Args:
+        memory_ids: 记忆 ID 列表
+        message_dict: 消息字典，包含：
+            - agent_id: Agent ID
+            - session_id: 会话 ID
+            - user_input: 用户输入
+            - agent_response: Agent 响应
+            - message_type: 消息类型
+
+    Returns:
+        添加结果
     """
     return await queue_save_to_memory_task(memory_ids, message_dict)
 
@@ -286,32 +320,37 @@ async def update_message_status(memory_id: str, message_id: int, status: bool):
 
 
 async def search_message(filter_dict: dict, params: dict):
-    """
-    :param filter_dict: {
-        "memory_id": list[str],
-        "agent_id": str,
-        "session_id": str
-        "user_id": str
-    }
-    :param params: {
-        "query": str,
-        "similarity_threshold": float,
-        "keywords_similarity_weight": float,
-        "top_n": int
-    }
+    """搜索记忆中的消息
+
+    Args:
+        filter_dict: 过滤字典，包含：
+            - memory_id: 记忆 ID 列表
+            - agent_id: Agent ID
+            - session_id: 会话 ID
+            - user_id: 用户 ID
+        params: 搜索参数，包含：
+            - query: 查询文本
+            - similarity_threshold: 相似度阈值
+            - keywords_similarity_weight: 关键词相似度权重
+            - top_n: 返回结果数量
+
+    Returns:
+        搜索结果
     """
     return query_message(filter_dict, params)
 
 
 async def get_messages(memory_ids: list[str], agent_id: str = "", session_id: str = "", limit: int = 10):
-    """
-    Get recent messages from specified memories.
+    """从指定记忆获取最近的消息
 
-    :param memory_ids: list of memory IDs
-    :param agent_id: optional agent ID for filtering
-    :param session_id: optional session ID for filtering
-    :param limit: maximum number of messages to return
-    :return: list of recent messages
+    Args:
+        memory_ids: 记忆 ID 列表
+        agent_id: 可选的 Agent ID 用于过滤
+        session_id: 可选的会话 ID 用于过滤
+        limit: 返回的最大消息数量
+
+    Returns:
+        最近的消息列表
     """
     memory_list = MemoryService.get_by_ids(memory_ids)
     uids = [memory.tenant_id for memory in memory_list]
@@ -326,13 +365,17 @@ async def get_messages(memory_ids: list[str], agent_id: str = "", session_id: st
 
 
 async def get_message_content(memory_id: str, message_id: int):
-    """
-    Get content of a specific message from a memory.
+    """获取记忆中特定消息的内容
 
-    :param memory_id: memory ID
-    :param message_id: message ID
-    :return: message content
-    :raises NotFoundException: if memory or message not found
+    Args:
+        memory_id: 记忆 ID
+        message_id: 消息 ID
+
+    Returns:
+        消息内容
+
+    Raises:
+        NotFoundException: 当记忆或消息不存在时抛出
     """
     memory = MemoryService.get_by_memory_id(memory_id)
     if not memory:

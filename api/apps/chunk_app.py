@@ -13,6 +13,18 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+文档块（Chunk）管理模块
+
+本模块提供文档块相关的API接口，包括：
+- 文档块列表查询（支持关键词搜索）
+- 文档块详情查询
+- 文档块创建和更新
+- 文档块删除
+- 文档块状态切换
+- 检索测试
+- 知识图谱查询
+"""
 import base64
 import datetime
 import json
@@ -51,6 +63,21 @@ from api.apps import login_required, current_user
 @login_required
 @validate_request("doc_id")
 async def list_chunk():
+    """
+    获取文档块列表
+
+    功能：查询指定文档的所有文档块，支持关键词搜索和高亮显示
+
+    参数：
+        - doc_id: 文档ID
+        - page: 页码（默认1）
+        - size: 每页数量（默认30）
+        - keywords: 搜索关键词
+        - available_int: 可用性状态过滤（可选）
+
+    返回：
+        - 文档块列表和总数
+    """
     req = await get_request_json()
     doc_id = req["doc_id"]
     page = int(req.get("page", 1))
@@ -100,6 +127,17 @@ async def list_chunk():
 @manager.route('/get', methods=['GET'])  # noqa: F821
 @login_required
 def get():
+    """
+    获取文档块详情
+
+    功能：根据文档块ID查询详细信息
+
+    参数：
+        - chunk_id: 文档块ID
+
+    返回：
+        - 文档块详细信息
+    """
     chunk_id = request.args["chunk_id"]
     try:
         chunk = None
@@ -133,6 +171,26 @@ def get():
 @login_required
 @validate_request("doc_id", "chunk_id", "content_with_weight")
 async def set():
+    """
+    更新文档块
+
+    功能：更新文档块的内容和属性，并重新计算向量嵌入
+
+    参数：
+        - doc_id: 文档ID
+        - chunk_id: 文档块ID
+        - content_with_weight: 文档块内容
+        - important_kwd: 重要关键词列表（可选）
+        - question_kwd: 问题关键词列表（可选）
+        - tag_kwd: 标签列表（可选）
+        - tag_feas: 标签特征（可选）
+        - available_int: 可用性状态（可选）
+        - image_base64: 图片base64编码（可选）
+        - img_id: 图片ID（可选）
+
+    返回：
+        - 操作结果
+    """
     req = await get_request_json()
     content_with_weight = req["content_with_weight"]
     if not isinstance(content_with_weight, (str, bytes)):
@@ -219,6 +277,19 @@ async def set():
 @login_required
 @validate_request("chunk_ids", "available_int", "doc_id")
 async def switch():
+    """
+    批量切换文档块状态
+
+    功能：批量启用或禁用文档块
+
+    参数：
+        - doc_id: 文档ID
+        - chunk_ids: 文档块ID列表
+        - available_int: 可用性状态（0=禁用，1=启用）
+
+    返回：
+        - 操作结果
+    """
     req = await get_request_json()
     try:
         def _switch_sync():
@@ -242,6 +313,19 @@ async def switch():
 @login_required
 @validate_request("doc_id")
 async def rm():
+    """
+    删除文档块
+
+    功能：删除指定的文档块，支持批量删除和全部删除
+
+    参数：
+        - doc_id: 文档ID
+        - chunk_ids: 文档块ID列表（可选，为空时根据delete_all参数决定）
+        - delete_all: 是否删除所有文档块（可选）
+
+    返回：
+        - 操作结果
+    """
     req = await get_request_json()
     try:
         def _rm_sync():
@@ -305,6 +389,23 @@ async def rm():
 @login_required
 @validate_request("doc_id", "content_with_weight")
 async def create():
+    """
+    创建文档块
+
+    功能：为文档创建新的文档块，并计算向量嵌入
+
+    参数：
+        - doc_id: 文档ID
+        - content_with_weight: 文档块内容
+        - important_kwd: 重要关键词列表（可选）
+        - question_kwd: 问题关键词列表（可选）
+        - tag_kwd: 标签列表（可选）
+        - tag_feas: 标签特征（可选）
+        - image_base64: 图片base64编码（可选）
+
+    返回：
+        - 创建的文档块ID和图片ID
+    """
     req = await get_request_json()
     req_id = request.headers.get("X-Request-ID")
     chunck_id = xxhash.xxh64((req["content_with_weight"] + req["doc_id"]).encode("utf-8")).hexdigest()
@@ -406,6 +507,31 @@ async def create():
 @login_required
 @validate_request("kb_id", "question")
 async def retrieval_test():
+    """
+    知识库检索测试
+
+    功能：对知识库进行检索测试，支持多种检索配置和过滤条件
+
+    参数：
+        - kb_id: 知识库ID或ID列表
+        - question: 检索问题
+        - page: 页码（默认1）
+        - size: 每页数量（默认30）
+        - doc_ids: 文档ID过滤（可选）
+        - use_kg: 是否使用知识图谱（可选）
+        - top_k: 返回的最大结果数（默认1024）
+        - cross_languages: 跨语言检索配置（可选）
+        - similarity_threshold: 相似度阈值（默认0.0）
+        - vector_similarity_weight: 向量相似度权重（默认0.3）
+        - search_id: 搜索配置ID（可选）
+        - meta_data_filter: 元数据过滤条件（可选）
+        - keyword: 是否使用关键词提取（可选）
+        - tenant_rerank_id: 租户重排序模型ID（可选）
+        - rerank_id: 重排序模型ID（可选）
+
+    返回：
+        - 检索结果（包含文档块列表和标签）
+    """
     req = await get_request_json()
     page = int(req.get("page", 1))
     size = int(req.get("size", 30))
@@ -537,6 +663,17 @@ async def retrieval_test():
 @manager.route('/knowledge_graph', methods=['GET'])  # noqa: F821
 @login_required
 async def knowledge_graph():
+    """
+    获取文档知识图谱
+
+    功能：查询文档的知识图谱和思维导图
+
+    参数：
+        - doc_id: 文档ID
+
+    返回：
+        - 知识图谱和思维导图数据
+    """
     doc_id = request.args["doc_id"]
     tenant_id = DocumentService.get_tenant_id(doc_id)
     kb_ids = KnowledgebaseService.get_kb_ids(tenant_id)

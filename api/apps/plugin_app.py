@@ -14,6 +14,13 @@
 #  limitations under the License.
 #
 
+"""
+插件管理应用模块
+
+本模块提供 LLM 工具插件的管理接口，包括：
+- 获取所有可用的 LLM 工具插件列表
+- 工具插件的元数据查询
+"""
 
 from quart import Response
 from api.apps import login_required
@@ -24,6 +31,12 @@ from agent.plugin import GlobalPluginManager
 @manager.route('/llm_tools', methods=['GET'])  # noqa: F821
 @login_required
 def llm_tools() -> Response:
+    """
+    获取所有可用的 LLM 工具插件
+
+    Returns:
+        包含所有工具插件元数据的列表
+    """
     tools = GlobalPluginManager.get_llm_tools()
     tools_metadata = [t.get_metadata() for t in tools]
 

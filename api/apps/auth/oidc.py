@@ -14,16 +14,34 @@
 #  limitations under the License.
 #
 
+"""
+OpenID Connect (OIDC) 认证客户端模块
+
+本模块实现了 OIDC 认证流程，包括：
+- OIDC 发现文档自动获取
+- ID Token 验证和解析
+- JWT 签名验证
+- 用户信息获取和标准化
+"""
+
 import jwt
 from common.http_client import sync_request
 from .oauth import OAuthClient
 
 
 class OIDCClient(OAuthClient):
+    """OpenID Connect 认证客户端类"""
+
     def __init__(self, config):
         """
-        Initialize the OIDCClient with the provider's configuration.
-        Use `issuer` as the single source of truth for configuration discovery.
+        初始化 OIDC 客户端
+
+        Args:
+            config: OIDC 配置字典，必须包含 issuer 字段。
+                   其他配置将从 OIDC 发现文档自动获取
+
+        Raises:
+            ValueError: 缺少 issuer 配置或获取发现文档失败时抛出异常
         """
         self.issuer = config.get("issuer")
         if not self.issuer:
@@ -32,7 +50,7 @@ class OIDCClient(OAuthClient):
         oidc_metadata = self._load_oidc_metadata(self.issuer)
         config.update({
             'issuer': oidc_metadata['issuer'],
-            'jwks_uri': oidc_metadata['jwks_uri'], 
+            'jwks_uri': oidc_metadata['jwks_uri'],
             'authorization_url': oidc_metadata['authorization_endpoint'],
             'token_url': oidc_metadata['token_endpoint'],
             'userinfo_url': oidc_metadata['userinfo_endpoint']
@@ -46,7 +64,16 @@ class OIDCClient(OAuthClient):
     @staticmethod
     def _load_oidc_metadata(issuer):
         """
-        Load OIDC metadata from `/.well-known/openid-configuration`.
+        从 OIDC 发现文档加载配置元数据
+
+        Args:
+            issuer: OIDC 提供商的 issuer URL
+
+        Returns:
+            dict: 包含授权端点、令牌端点、用户信息端点等配置的字典
+
+        Raises:
+            ValueError: 获取发现文档失败时抛出异常
         """
         try:
             metadata_url = f"{issuer}/.well-known/openid-configuration"
@@ -59,7 +86,16 @@ class OIDCClient(OAuthClient):
 
     def parse_id_token(self, id_token):
         """
-        Parse and validate OIDC ID Token (JWT format) with signature verification.
+        解析并验证 OIDC ID Token（JWT 格式）
+
+        Args:
+            id_token: JWT 格式的 ID Token
+
+        Returns:
+            dict: 解码后的 Token 内容
+
+        Raises:
+            ValueError: Token 解析或验证失败时抛出异常
         """
         try:
             # Decode JWT header without verifying signature
@@ -87,7 +123,15 @@ class OIDCClient(OAuthClient):
 
     def fetch_user_info(self, access_token, id_token=None, **kwargs):
         """
-        Fetch user info.
+        获取用户信息（同步方法）
+
+        Args:
+            access_token: 访问令牌
+            id_token: ID Token（可选），用于获取额外的用户信息
+            **kwargs: 其他可选参数
+
+        Returns:
+            UserInfo: 标准化的用户信息对象
         """
         user_info = {}
         if id_token:
@@ -96,6 +140,17 @@ class OIDCClient(OAuthClient):
         return self.normalize_user_info(user_info)
 
     async def async_fetch_user_info(self, access_token, id_token=None, **kwargs):
+        """
+        获取用户信息（异步方法）
+
+        Args:
+            access_token: 访问令牌
+            id_token: ID Token（可选），用于获取额外的用户信息
+            **kwargs: 其他可选参数
+
+        Returns:
+            UserInfo: 标准化的用户信息对象
+        """
         user_info = {}
         if id_token:
             user_info = self.parse_id_token(id_token)
@@ -104,4 +159,13 @@ class OIDCClient(OAuthClient):
 
 
     def normalize_user_info(self, user_info):
+        """
+        标准化用户信息
+
+        Args:
+            user_info: OIDC 提供商返回的原始用户信息
+
+        Returns:
+            UserInfo: 标准化后的用户信息对象
+        """
         return super().normalize_user_info(user_info)

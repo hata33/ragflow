@@ -13,6 +13,16 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""RAGFlow API 应用初始化模块
+
+该模块是 RAGFlow API 应用的主入口，负责：
+- 创建和配置 Quart 应用实例
+- 设置会话管理、CORS、超时等配置
+- 实现用户认证和授权逻辑
+- 注册蓝图和路由
+- 错误处理
+"""
+
 import logging
 import os
 import sys
@@ -44,6 +54,14 @@ UNAUTHORIZED_MESSAGE = "<Unauthorized '401: Unauthorized'>"
 
 
 def _unauthorized_message(error):
+    """获取未授权错误消息
+
+    Args:
+        error: 异常对象
+
+    Returns:
+        错误消息字符串
+    """
     if error is None:
         return UNAUTHORIZED_MESSAGE
 
@@ -93,6 +111,16 @@ P = ParamSpec("P")
 
 
 def _load_user():
+    """从请求头加载用户信息
+
+    支持多种认证方式：
+    1. JWT token 认证
+    2. API token 认证
+    3. 原始 access_token 认证（用于不带 JWT 的登录令牌）
+
+    Returns:
+        用户对象，认证失败返回 None
+    """
     jwt = Serializer(secret_key=settings.SECRET_KEY)
     authorization = request.headers.get("Authorization")
     g.user = None
@@ -165,12 +193,10 @@ current_user = LocalProxy(_load_user)
 
 
 def login_required(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
-    """A decorator to restrict route access to authenticated users.
+    """限制路由仅对已认证用户访问的装饰器
 
-    This should be used to wrap a route handler (or view function) to
-    enforce that only authenticated requests can access it. Note that
-    it is important that this decorator be wrapped by the route
-    decorator and not vice, versa, as below.
+    该装饰器用于包装路由处理函数（或视图函数），强制要求只有已认证的请求才能访问。
+    注意：该装饰器应被路由装饰器包装，而不是反过来，如下所示：
 
     .. code-block:: python
 
@@ -179,9 +205,13 @@ def login_required(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]
         async def index():
             ...
 
-    If the request is not authenticated a
-    `quart.exceptions.Unauthorized` exception will be raised.
+    如果请求未认证，将抛出 `quart.exceptions.Unauthorized` 异常。
 
+    Args:
+        func: 要装饰的路由处理函数
+
+    Returns:
+        包装后的异步函数
     """
 
     @wraps(func)
@@ -203,28 +233,22 @@ def login_required(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]
 
 
 def login_user(user, remember=False, duration=None, force=False, fresh=True):
-    """
-    Logs a user in. You should pass the actual user object to this. If the
-    user's `is_active` property is ``False``, they will not be logged in
-    unless `force` is ``True``.
+    """用户登录
 
-    This will return ``True`` if the login attempt succeeds, and ``False`` if
-    it fails (i.e. because the user is inactive).
+    应该传入实际的用户对象。如果用户的 `is_active` 属性为 ``False``，
+    除非 `force` 为 ``True``，否则不会登录。
 
-    :param user: The user object to log in.
-    :type user: object
-    :param remember: Whether to remember the user after their session expires.
-        Defaults to ``False``.
-    :type remember: bool
-    :param duration: The amount of time before the remember cookie expires. If
-        ``None`` the value set in the settings is used. Defaults to ``None``.
-    :type duration: :class:`datetime.timedelta`
-    :param force: If the user is inactive, setting this to ``True`` will log
-        them in regardless. Defaults to ``False``.
-    :type force: bool
-    :param fresh: setting this to ``False`` will log in the user with a session
-        marked as not "fresh". Defaults to ``True``.
-    :type fresh: bool
+    登录尝试成功返回 ``True``，失败返回 ``False``（例如用户未激活）。
+
+    Args:
+        user: 要登录的用户对象
+        remember: 会话过期后是否记住用户。默认为 ``False``
+        duration: 记忆 cookie 过期的时间量。如果为 ``None`` 则使用设置中的值。默认为 ``None``
+        force: 如果用户未激活，设置为 ``True`` 将强制登录。默认为 ``False``
+        fresh: 设置为 ``False`` 将使用标记为非 "fresh" 的会话登录用户。默认为 ``True``
+
+    Returns:
+        登录成功返回 True，失败返回 False
     """
     if not force and not user.is_active:
         return False
@@ -236,9 +260,12 @@ def login_user(user, remember=False, duration=None, force=False, fresh=True):
 
 
 def logout_user():
-    """
-    Logs a user out. (You do not need to pass the actual user.) This will
-    also clean up the remember me cookie if it exists.
+    """用户登出（无需传入实际用户对象）
+
+    这也会清除 "记住我" cookie（如果存在）。
+
+    Returns:
+        成功返回 True
     """
     if "_user_id" in session:
         session.pop("_user_id")
@@ -260,6 +287,19 @@ def logout_user():
 
 
 def search_pages_path(page_path):
+    """搜索页面路径
+
+    查找指定目录下的所有应用模块文件，包括：
+    - *_app.py 文件
+    - *sdk/*.py 文件
+    - *restful_apis/*.py 文件
+
+    Args:
+        page_path: 要搜索的目录路径
+
+    Returns:
+        找到的文件路径列表
+    """
     app_path_list = [
         path for path in page_path.glob("*_app.py") if not path.name.startswith(".")
     ]
@@ -275,6 +315,16 @@ def search_pages_path(page_path):
 
 
 def register_page(page_path):
+    """注册页面蓝图
+
+    动态加载并注册页面模块为 Flask 蓝图。
+
+    Args:
+        page_path: 页面模块文件路径
+
+    Returns:
+        URL 前缀字符串
+    """
     path = f"{page_path}"
 
     page_name = page_path.stem.removesuffix("_app")
@@ -313,6 +363,14 @@ client_urls_prefix = [
 
 @app.errorhandler(404)
 async def not_found(error):
+    """处理 404 错误
+
+    Args:
+        error: 错误对象
+
+    Returns:
+        JSON 错误响应
+    """
     logging.error(f"The requested URL {request.path} was not found")
     message = f"Not Found: {request.path}"
     response = {
@@ -326,23 +384,52 @@ async def not_found(error):
 
 @app.errorhandler(401)
 async def unauthorized(error):
+    """处理 401 未授权错误
+
+    Args:
+        error: 错误对象
+
+    Returns:
+        JSON 错误响应
+    """
     logging.warning("Unauthorized request")
     return get_json_result(code=RetCode.UNAUTHORIZED, message=_unauthorized_message(error)), RetCode.UNAUTHORIZED
 
 
 @app.errorhandler(QuartAuthUnauthorized)
 async def unauthorized_quart_auth(error):
+    """处理 Quart Auth 未授权错误
+
+    Args:
+        error: 错误对象
+
+    Returns:
+        JSON 错误响应
+    """
     logging.warning("Unauthorized request (quart_auth)")
     return get_json_result(code=RetCode.UNAUTHORIZED, message=repr(error)), RetCode.UNAUTHORIZED
 
 
 @app.errorhandler(WerkzeugUnauthorized)
 async def unauthorized_werkzeug(error):
+    """处理 Werkzeug 未授权错误
+
+    Args:
+        error: 错误对象
+
+    Returns:
+        JSON 错误响应
+    """
     logging.warning("Unauthorized request (werkzeug)")
     return get_json_result(code=error.code, message=error.description), RetCode.UNAUTHORIZED
 
 @app.teardown_request
 def _db_close(exception):
+    """请求结束后关闭数据库连接
+
+    Args:
+        exception: 请求处理过程中的异常（如果有）
+    """
     if exception:
         logging.exception(f"Request failed: {exception}")
     close_connection()

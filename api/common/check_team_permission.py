@@ -14,6 +14,16 @@
 #  limitations under the License.
 #
 
+"""
+团队权限检查模块
+
+该模块提供用于检查知识库和文件的团队权限的函数。
+
+主要功能：
+- 检查用户是否有权限访问特定知识库
+- 检查用户是否有权限访问特定文件
+- 支持团队级别的权限验证
+"""
 
 from api.db import TenantPermission
 from api.db.db_models import File, Knowledgebase
@@ -23,6 +33,20 @@ from api.db.services.user_service import TenantService
 
 
 def check_kb_team_permission(kb: dict | Knowledgebase, other: str) -> bool:
+    """
+    检查用户是否有权限访问知识库
+
+    检查逻辑：
+    1. 如果用户是知识库的拥有者，允许访问
+    2. 如果知识库权限是团队级别，检查用户是否加入了该团队
+
+    参数：
+        kb: 知识库对象或字典
+        other: 要检查的用户 ID
+
+    返回：
+        bool: 用户是否有权限访问该知识库
+    """
     kb = kb.to_dict() if isinstance(kb, Knowledgebase) else kb
 
     kb_tenant_id = kb["tenant_id"]
@@ -38,6 +62,21 @@ def check_kb_team_permission(kb: dict | Knowledgebase, other: str) -> bool:
 
 
 def check_file_team_permission(file: dict | File, other: str) -> bool:
+    """
+    检查用户是否有权限访问文件
+
+    检查逻辑：
+    1. 如果用户是文件的拥有者，允许访问
+    2. 否则检查文件关联的知识库权限
+    3. 如果用户对任何一个关联知识库有权限，则允许访问文件
+
+    参数：
+        file: 文件对象或字典
+        other: 要检查的用户 ID
+
+    返回：
+        bool: 用户是否有权限访问该文件
+    """
     file = file.to_dict() if isinstance(file, File) else file
 
     file_tenant_id = file["tenant_id"]

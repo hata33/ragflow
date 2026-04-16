@@ -14,10 +14,11 @@
 #  limitations under the License.
 #
 """
-Chat API 模块
+Chat RESTful API 模块
 
 本模块提供聊天对话相关的 RESTful API 接口，包括对话助手的创建、查询、更新、删除，
 以及会话管理、消息反馈、语音合成/识别、思维导图生成等功能。
+
 主要功能：
 - Chat (对话助手) CRUD 操作
 - Session (会话) 管理
@@ -25,6 +26,7 @@ Chat API 模块
 - TTS (文本转语音) 与 ASR (语音转文本)
 - 相关问题推荐与思维导图生成
 - 流式对话补全接口
+- 快速提问接口
 """
 
 import json

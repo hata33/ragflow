@@ -13,6 +13,20 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+
+"""
+画布（Canvas）应用API端点模块
+
+提供画布相关的REST API功能，包括：
+- 画布模板管理
+- 画布的创建、保存、删除、查询
+- 画布的运行和调试
+- 数据流（DataFlow）管道操作
+- 会话管理
+- 数据库连接测试
+- 版本控制
+"""
+
 import copy
 import inspect
 import json
@@ -55,6 +69,12 @@ from api.db.services.canvas_service import completion as agent_completion
 @manager.route('/templates', methods=['GET'])  # noqa: F821
 @login_required
 def templates():
+    """
+    获取所有画布模板
+
+    Returns:
+        JSON响应，包含所有可用的画布模板列表
+    """
     return get_json_result(data=[c.to_dict() for c in CanvasTemplateService.get_all()])
 
 
@@ -62,6 +82,18 @@ def templates():
 @validate_request("canvas_ids")
 @login_required
 async def rm():
+    """
+    删除画布
+
+    Args:
+        canvas_ids: 要删除的画布ID列表
+
+    Returns:
+        JSON响应，删除成功返回True
+
+    Note:
+        只有画布的所有者才能删除画布
+    """
     req = await get_request_json()
     for i in req["canvas_ids"]:
         if not UserCanvasService.accessible(i, current_user.id):
@@ -76,6 +108,22 @@ async def rm():
 @validate_request("dsl", "title")
 @login_required
 async def save():
+    """
+    保存画布
+
+    Args:
+        dsl: 画布的DSL定义
+        title: 画布标题
+        canvas_category: 画布类别（Agent或DataFlow）
+        release: 是否发布版本
+
+    Returns:
+        JSON响应，包含保存的画布信息
+
+    Note:
+        新建画布时会检查标题是否重复
+        保存时会自动创建版本快照
+    """
     req = await get_request_json()
     req['release'] = bool(req.get("release", ""))
     try:
@@ -119,6 +167,19 @@ async def save():
 @manager.route('/get/<canvas_id>', methods=['GET'])  # noqa: F821
 @login_required
 def get(canvas_id):
+    """
+    获取画布详情
+
+    Args:
+        canvas_id: 画布ID
+
+    Returns:
+        JSON响应，包含画布的完整信息，包括DSL、版本信息等
+
+    Note:
+        会规范化DSL格式
+        对于DataFlow类型，会返回关联的数据集
+    """
     if not UserCanvasService.accessible(canvas_id, current_user.id):
         return get_data_error_result(message="canvas not found.")
     e, c = UserCanvasService.get_by_canvas_id(canvas_id)
@@ -191,6 +252,24 @@ def getsse(canvas_id):
 @validate_request("id")
 @login_required
 async def run():
+    """
+    运行画布/Agent
+
+    Args:
+        id: 画布ID
+        query: 用户查询/问题
+        files: 上传的文件列表
+        inputs: 额外的输入参数
+        user_id: 运行时用户ID（可选）
+
+    Returns:
+        对于DataFlow类型：返回任务ID
+        对于Agent类型：返回SSE流式响应
+
+    Note:
+        支持流式输出（Server-Sent Events）
+        运行完成后会保存运行时状态
+    """
     req = await get_request_json()
     query = req.get("query", "")
     files = req.get("files", [])
@@ -353,6 +432,18 @@ def cancel(task_id):
 @validate_request("id")
 @login_required
 async def reset():
+    """
+    重置画布状态
+
+    Args:
+        id: 画布ID
+
+    Returns:
+        JSON响应，包含重置后的DSL
+
+    Note:
+        清除画布的运行状态，恢复到初始状态
+    """
     req = await get_request_json()
     if not UserCanvasService.accessible(req["id"], current_user.id):
         return get_json_result(
@@ -414,6 +505,20 @@ def input_form():
 @validate_request("id", "component_id", "params")
 @login_required
 async def debug():
+    """
+    调试画布组件
+
+    Args:
+        id: 画布ID
+        component_id: 组件ID
+        params: 组件参数
+
+    Returns:
+        JSON响应，包含组件的输出结果
+
+    Note:
+        用于测试单个组件的运行效果
+    """
     req = await get_request_json()
     if not UserCanvasService.accessible(req["id"], current_user.id):
         return get_json_result(
@@ -451,6 +556,27 @@ async def debug():
 @validate_request("db_type", "database", "username", "host", "port", "password")
 @login_required
 async def test_db_connect():
+    """
+    测试数据库连接
+
+    Args:
+        db_type: 数据库类型（mysql, mariadb, oceanbase, postgres, mssql, IBM DB2, trino）
+        database: 数据库名称
+        username: 用户名
+        host: 主机地址
+        port: 端口号
+        password: 密码
+
+    Returns:
+        JSON响应，连接成功返回成功消息
+
+    Supports:
+        - MySQL/MariaDB/OceanBase
+        - PostgreSQL
+        - SQL Server
+        - IBM DB2
+        - Trino
+    """
     req = await get_request_json()
     try:
         if req["db_type"] in ["mysql", "mariadb"]:
@@ -556,6 +682,15 @@ async def test_db_connect():
 @manager.route('/getlistversion/<canvas_id>', methods=['GET'])  # noqa: F821
 @login_required
 def getlistversion(canvas_id):
+    """
+    获取画布的所有版本列表
+
+    Args:
+        canvas_id: 画布ID
+
+    Returns:
+        JSON响应，包含版本列表（按更新时间倒序）
+    """
     try:
         versions =sorted([c.to_dict() for c in UserCanvasVersionService.list_by_canvas_id(canvas_id)], key=lambda x: x["update_time"]*-1)
         return get_json_result(data=versions)
@@ -567,6 +702,15 @@ def getlistversion(canvas_id):
 @manager.route('/getversion/<version_id>', methods=['GET'])  # noqa: F821
 @login_required
 def getversion( version_id):
+    """
+    获取指定版本的画布DSL
+
+    Args:
+        version_id: 版本ID
+
+    Returns:
+        JSON响应，包含版本详情
+    """
     try:
         e, version = UserCanvasVersionService.get_by_id(version_id)
         if version:
@@ -578,6 +722,21 @@ def getversion( version_id):
 @manager.route('/list', methods=['GET'])  # noqa: F821
 @login_required
 def list_canvas():
+    """
+    获取画布列表
+
+    Query Params:
+        keywords: 搜索关键词
+        page: 页码
+        page_size: 每页数量
+        orderby: 排序字段
+        desc: 是否降序
+        canvas_category: 画布类别
+        owner_ids: 所有者ID列表
+
+    Returns:
+        JSON响应，包含画布列表和总数
+    """
     keywords = request.args.get("keywords", "")
     page_number = int(request.args.get("page", 0))
     items_per_page = int(request.args.get("page_size", 0))
@@ -646,6 +805,27 @@ def trace():
 @manager.route('/<canvas_id>/sessions', methods=['GET'])  # noqa: F821
 @login_required
 def sessions(canvas_id):
+    """
+    获取画布的会话列表
+
+    Args:
+        canvas_id: 画布ID
+
+    Query Params:
+        user_id: 用户ID
+        page: 页码
+        page_size: 每页数量
+        orderby: 排序字段
+        desc: 是否降序
+        keywords: 搜索关键词
+        from_date: 起始日期
+        to_date: 结束日期
+        exp_user_id: 外部用户ID
+        dsl: 是否包含DSL
+
+    Returns:
+        JSON响应，包含会话列表和总数
+    """
     tenant_id = current_user.id
     if not UserCanvasService.accessible(canvas_id, tenant_id):
         return get_json_result(
@@ -668,7 +848,7 @@ def sessions(canvas_id):
     if exp_user_id:
         sess = API4ConversationService.get_names(canvas_id, exp_user_id)
         return get_json_result(data={"total": len(sess), "sessions": sess})
-    
+
     # dsl defaults to True in all cases except for False and false
     include_dsl = request.args.get("dsl") != "False" and request.args.get("dsl") != "false"
     total, sess = API4ConversationService.get_list(canvas_id, tenant_id, page_number, items_per_page, orderby, desc,

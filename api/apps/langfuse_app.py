@@ -14,6 +14,14 @@
 #  limitations under the License.
 #
 
+"""
+Langfuse 集成应用模块
+
+本模块提供 Langfuse 可观测性平台的 API 集成，包括：
+- Langfuse API 密钥管理（设置、获取、删除）
+- API 密钥验证和认证检查
+- 项目信息查询
+"""
 
 from api.apps import current_user, login_required
 from langfuse import Langfuse
@@ -27,6 +35,17 @@ from api.utils.api_utils import get_error_data_result, get_json_result, get_requ
 @login_required
 @validate_request("secret_key", "public_key", "host")
 async def set_api_key():
+    """
+    设置或更新 Langfuse API 密钥
+
+    请求体：
+        - secret_key: Langfuse 密钥
+        - public_key: Langfuse 公钥
+        - host: Langfuse 服务器地址
+
+    Returns:
+        成功时返回保存的密钥配置，失败时返回错误信息
+    """
     req = await get_request_json()
     secret_key = req.get("secret_key", "")
     public_key = req.get("public_key", "")
@@ -62,6 +81,12 @@ async def set_api_key():
 @login_required
 @validate_request()
 def get_api_key():
+    """
+    获取当前用户的 Langfuse API 密钥和项目信息
+
+    Returns:
+        包含 API 密钥、项目 ID 和项目名称的信息
+    """
     current_user_id = current_user.id
     langfuse_entry = TenantLangfuseService.filter_by_tenant_with_info(tenant_id=current_user_id)
     if not langfuse_entry:
@@ -86,6 +111,12 @@ def get_api_key():
 @login_required
 @validate_request()
 def delete_api_key():
+    """
+    删除当前用户的 Langfuse API 密钥
+
+    Returns:
+        成功时返回 True，失败时返回错误信息
+    """
     current_user_id = current_user.id
     langfuse_entry = TenantLangfuseService.filter_by_tenant(tenant_id=current_user_id)
     if not langfuse_entry:

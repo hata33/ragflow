@@ -13,6 +13,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""Canvas 副本服务模块
+
+该模块提供了 Canvas（画布）运行时副本的管理功能，用于在 Redis 中存储和管理
+每个用户的 Canvas 运行时状态。
+"""
 
 import json
 import logging
@@ -25,6 +30,15 @@ from rag.utils.redis_conn import REDIS_CONN, RedisDistributedLock
 
 
 class CanvasReplicaService:
+    """Canvas 副本服务类
+
+    管理 Redis 中存储的每个用户的 Canvas 运行时副本。
+
+    生命周期：
+    - bootstrap: 从数据库 DSL 初始化/刷新副本
+    - load_for_run: 运行前读取副本
+    - commit_after_run: 运行后将结果原子化持久化到副本
+    """
     """
     Manage per-user canvas runtime replicas stored in Redis.
 
@@ -45,7 +59,17 @@ class CanvasReplicaService:
 
     @classmethod
     def normalize_dsl(cls, dsl):
-        """Normalize DSL to a JSON-serializable dict. Raise ValueError on invalid input."""
+        """规范化 DSL 为可 JSON 序列化的字典
+
+        Args:
+            dsl: DSL 对象，可以是字符串或字典
+
+        Returns:
+            规范化后的 DSL 字典
+
+        Raises:
+            ValueError: 当 DSL 无效或无法序列化时抛出异常
+        """
         normalized = dsl
         if isinstance(normalized, str):
             try:
@@ -64,17 +88,44 @@ class CanvasReplicaService:
 
     @classmethod
     def _replica_key(cls, canvas_id: str, tenant_id: str, runtime_user_id: str) -> str:
+        """生成 Redis 副本键
+
+        Args:
+            canvas_id: Canvas ID
+            tenant_id: 租户 ID
+            runtime_user_id: 运行时用户 ID
+
+        Returns:
+            Redis 键字符串
+        """
         return f"{cls.REPLICA_KEY_PREFIX}:{canvas_id}:{tenant_id}:{runtime_user_id}"
 
 
     @classmethod
     def _lock_key(cls, canvas_id: str, tenant_id: str, runtime_user_id: str) -> str:
+        """生成 Redis 锁键
+
+        Args:
+            canvas_id: Canvas ID
+            tenant_id: 租户 ID
+            runtime_user_id: 运行时用户 ID
+
+        Returns:
+            Redis 锁键字符串
+        """
         return f"{cls.LOCK_KEY_PREFIX}:{canvas_id}:{tenant_id}:{runtime_user_id}"
 
 
     @classmethod
     def _read_payload(cls, replica_key: str):
-        """Read replica payload from Redis; return None on missing/invalid content."""
+        """从 Redis 读取副本负载
+
+        Args:
+            replica_key: 副本键
+
+        Returns:
+            副本负载字典，如果内容缺失或无效则返回 None
+        """
         cache_blob = REDIS_CONN.get(replica_key)
         if not cache_blob:
             return None
@@ -91,7 +142,12 @@ class CanvasReplicaService:
 
     @classmethod
     def _write_payload(cls, replica_key: str, payload: dict):
-        """Write payload and refresh TTL."""
+        """写入负载并刷新 TTL
+
+        Args:
+            replica_key: 副本键
+            payload: 要写入的负载字典
+        """
         payload["updated_at"] = int(time.time())
         REDIS_CONN.set_obj(replica_key, payload, cls.TTL_SECS)
 
@@ -106,6 +162,19 @@ class CanvasReplicaService:
         canvas_category=CanvasCategory.Agent,
         title="",
     ):
+        """构建副本负载
+
+        Args:
+            canvas_id: Canvas ID
+            tenant_id: 租户 ID
+            runtime_user_id: 运行时用户 ID
+            dsl: DSL 对象
+            canvas_category: Canvas 分类，默认为 Agent
+            title: Canvas 标题
+
+        Returns:
+            构建好的负载字典
+        """
         return {
             "canvas_id": canvas_id,
             "tenant_id": str(tenant_id),
@@ -127,7 +196,19 @@ class CanvasReplicaService:
         canvas_category=CanvasCategory.Agent,
         title="",
     ):
-        """Create a runtime replica if it does not exist; otherwise keep existing state."""
+        """如果运行时副本不存在则创建，否则保持现有状态
+
+        Args:
+            canvas_id: Canvas ID
+            tenant_id: 租户 ID
+            runtime_user_id: 运行时用户 ID
+            dsl: DSL 对象
+            canvas_category: Canvas 分类，默认为 Agent
+            title: Canvas 标题
+
+        Returns:
+            副本负载字典
+        """
         replica_key = cls._replica_key(canvas_id, str(tenant_id), str(runtime_user_id))
         payload = cls._read_payload(replica_key)
         if payload:
@@ -147,7 +228,19 @@ class CanvasReplicaService:
         canvas_category=CanvasCategory.Agent,
         title="",
     ):
-        """Bootstrap replica by creating it when absent and keeping existing runtime state."""
+        """引导副本，在不存在时创建并保持现有运行时状态
+
+        Args:
+            canvas_id: Canvas ID
+            tenant_id: 租户 ID
+            runtime_user_id: 运行时用户 ID
+            dsl: DSL 对象
+            canvas_category: Canvas 分类，默认为 Agent
+            title: Canvas 标题
+
+        Returns:
+            副本负载字典
+        """
         return cls.create_if_absent(
             canvas_id=canvas_id,
             tenant_id=tenant_id,
@@ -160,7 +253,16 @@ class CanvasReplicaService:
 
     @classmethod
     def load_for_run(cls, canvas_id: str, tenant_id: str, runtime_user_id: str):
-        """Load current runtime replica used by /completion."""
+        """加载用于 /completion 的当前运行时副本
+
+        Args:
+            canvas_id: Canvas ID
+            tenant_id: 租户 ID
+            runtime_user_id: 运行时用户 ID
+
+        Returns:
+            副本负载字典，如果不存在则返回 None
+        """
         replica_key = cls._replica_key(canvas_id, str(tenant_id), str(runtime_user_id))
         return cls._read_payload(replica_key)
 
@@ -175,7 +277,19 @@ class CanvasReplicaService:
         canvas_category=CanvasCategory.Agent,
         title="",
     ):
-        """Replace replica content for `/set` under lock."""
+        """在锁保护下为 `/set` 替换副本内容
+
+        Args:
+            canvas_id: Canvas ID
+            tenant_id: 租户 ID
+            runtime_user_id: 运行时用户 ID
+            dsl: DSL 对象
+            canvas_category: Canvas 分类，默认为 Agent
+            title: Canvas 标题
+
+        Returns:
+            成功返回 True，失败返回 False
+        """
         replica_key = cls._replica_key(canvas_id, str(tenant_id), str(runtime_user_id))
         lock_key = cls._lock_key(canvas_id, str(tenant_id), str(runtime_user_id))
         lock = cls._acquire_lock_with_retry(lock_key)
@@ -206,7 +320,14 @@ class CanvasReplicaService:
 
     @classmethod
     def _acquire_lock_with_retry(cls, lock_key: str):
-        """Acquire distributed lock with bounded retries; return lock object or None."""
+        """以有限重试次数获取分布式锁
+
+        Args:
+            lock_key: 锁键
+
+        Returns:
+            锁对象，获取失败则返回 None
+        """
         lock = RedisDistributedLock(
             lock_key,
             timeout=cls.LOCK_TIMEOUT_SECS,
@@ -230,11 +351,18 @@ class CanvasReplicaService:
         canvas_category=CanvasCategory.Agent,
         title="",
     ):
-        """
-        Commit post-run DSL into replica.
+        """将运行后的 DSL 提交到副本
+
+        Args:
+            canvas_id: Canvas ID
+            tenant_id: 租户 ID
+            runtime_user_id: 运行时用户 ID
+            dsl: DSL 对象
+            canvas_category: Canvas 分类，默认为 Agent
+            title: Canvas 标题
 
         Returns:
-            bool: True on committed/saved, False on commit failure.
+            成功提交/保存返回 True，提交失败返回 False
         """
         new_dsl = cls.normalize_dsl(dsl)
         replica_key = cls._replica_key(canvas_id, str(tenant_id), str(runtime_user_id))

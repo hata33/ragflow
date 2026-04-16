@@ -13,6 +13,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""文件 API 服务模块
+
+该模块提供了文件管理的核心功能，包括文件上传、文件夹创建、文件列表查询、
+文件删除、文件移动/重命名、文件内容获取等操作。
+"""
+
 import logging
 import os
 import pathlib
@@ -30,13 +36,15 @@ from common.misc_utils import get_uuid, thread_pool_exec
 
 
 async def upload_file(tenant_id: str, pf_id: str, file_objs: list):
-    """
-    Upload files to a folder.
+    """上传文件到文件夹
 
-    :param tenant_id: tenant ID
-    :param pf_id: parent folder ID
-    :param file_objs: list of file objects from request
-    :return: (success, result_list) or (success, error_message)
+    Args:
+        tenant_id: 租户 ID
+        pf_id: 父文件夹 ID
+        file_objs: 来自请求的文件对象列表
+
+    Returns:
+        (成功标志, 结果列表) 或 (成功标志, 错误信息)
     """
     if not pf_id:
         root_folder = FileService.get_root_folder(tenant_id)
@@ -103,14 +111,16 @@ async def upload_file(tenant_id: str, pf_id: str, file_objs: list):
 
 
 async def create_folder(tenant_id: str, name: str, pf_id: str = None, file_type: str = None):
-    """
-    Create a new folder or virtual file.
+    """创建新文件夹或虚拟文件
 
-    :param tenant_id: tenant ID
-    :param name: folder name
-    :param pf_id: parent folder ID
-    :param file_type: file type (folder or virtual)
-    :return: (success, result) or (success, error_message)
+    Args:
+        tenant_id: 租户 ID
+        name: 文件夹名称
+        pf_id: 父文件夹 ID
+        file_type: 文件类型（文件夹或虚拟）
+
+    Returns:
+        (成功标志, 结果) 或 (成功标志, 错误信息)
     """
     if not pf_id:
         root_folder = FileService.get_root_folder(tenant_id)
@@ -140,12 +150,14 @@ async def create_folder(tenant_id: str, name: str, pf_id: str = None, file_type:
 
 
 def list_files(tenant_id: str, args: dict):
-    """
-    List files under a folder.
+    """列出文件夹下的文件
 
-    :param tenant_id: tenant ID
-    :param args: query arguments (parent_id, keywords, page, page_size, orderby, desc)
-    :return: (success, result) or (success, error_message)
+    Args:
+        tenant_id: 租户 ID
+        args: 查询参数（parent_id, keywords, page, page_size, orderby, desc）
+
+    Returns:
+        (成功标志, 结果) 或 (成功标志, 错误信息)
     """
     pf_id = args.get("parent_id")
     keywords = args.get("keywords", "")
@@ -174,11 +186,13 @@ def list_files(tenant_id: str, args: dict):
 
 
 def get_parent_folder(file_id: str):
-    """
-    Get parent folder of a file.
+    """获取文件的父文件夹
 
-    :param file_id: file ID
-    :return: (success, result) or (success, error_message)
+    Args:
+        file_id: 文件 ID
+
+    Returns:
+        (成功标志, 结果) 或 (成功标志, 错误信息)
     """
     e, file = FileService.get_by_id(file_id)
     if not e:
@@ -189,11 +203,13 @@ def get_parent_folder(file_id: str):
 
 
 def get_all_parent_folders(file_id: str):
-    """
-    Get all ancestor folders of a file.
+    """获取文件的所有祖先文件夹
 
-    :param file_id: file ID
-    :return: (success, result) or (success, error_message)
+    Args:
+        file_id: 文件 ID
+
+    Returns:
+        (成功标志, 结果) 或 (成功标志, 错误信息)
     """
     e, file = FileService.get_by_id(file_id)
     if not e:
@@ -204,12 +220,14 @@ def get_all_parent_folders(file_id: str):
 
 
 async def delete_files(uid: str, file_ids: list):
-    """
-    Delete files/folders with team permission check and recursive deletion.
+    """删除文件/文件夹，包含团队权限检查和递归删除
 
-    :param uid: user ID
-    :param file_ids: list of file IDs to delete
-    :return: (success, result) or (success, error_message)
+    Args:
+        uid: 用户 ID
+        file_ids: 要删除的文件 ID 列表
+
+    Returns:
+        (成功标志, 结果) 或 (成功标志, 错误信息)
     """
     def _delete_single_file(file):
         try:
@@ -264,17 +282,19 @@ async def delete_files(uid: str, file_ids: list):
 
 
 async def move_files(uid: str, src_file_ids: list, dest_file_id: str = None, new_name: str = None):
-    """
-    Move and/or rename files. Follows Linux mv semantics:
-    - new_name only: rename in place (no storage operation)
-    - dest_file_id only: move to new folder (keep names)
-    - both: move and rename simultaneously
+    """移动和/或重命名文件。遵循 Linux mv 语义：
+    - 仅 new_name: 原地重命名（无存储操作）
+    - 仅 dest_file_id: 移动到新文件夹（保持名称）
+    - 两者都有: 同时移动和重命名
 
-    :param uid: user ID
-    :param src_file_ids: list of source file IDs
-    :param dest_file_id: destination folder ID (optional)
-    :param new_name: new name for the file (optional, single file only)
-    :return: (success, result) or (success, error_message)
+    Args:
+        uid: 用户 ID
+        src_file_ids: 源文件 ID 列表
+        dest_file_id: 目标文件夹 ID（可选）
+        new_name: 文件的新名称（可选，仅限单个文件）
+
+    Returns:
+        (成功标志, 结果) 或 (成功标志, 错误信息)
     """
     files = FileService.get_by_ids(src_file_ids)
     if not files:
@@ -382,12 +402,14 @@ async def move_files(uid: str, src_file_ids: list, dest_file_id: str = None, new
 
 
 def get_file_content(uid: str, file_id: str):
-    """
-    Get file content and metadata for download.
+    """获取文件内容和元数据用于下载
 
-    :param uid: user ID
-    :param file_id: file ID
-    :return: (success, (blob, file_obj)) or (success, error_message)
+    Args:
+        uid: 用户 ID
+        file_id: 文件 ID
+
+    Returns:
+        (成功标志, (文件内容, 文件对象)) 或 (成功标志, 错误信息)
     """
     e, file = FileService.get_by_id(file_id)
     if not e:

@@ -14,6 +14,19 @@
 #  limitations under the License.
 #
 
+"""
+RAGFlow 服务器启动脚本
+
+该脚本是 RAGFlow 应用的主入口点，负责启动 Flask 服务器和相关后台服务。
+
+主要功能：
+- 初始化数据库表和初始数据
+- 启动 Flask Web 服务器
+- 运行后台任务（如文档解析进度更新）
+- 处理系统信号以实现优雅关闭
+- 支持远程调试（通过 RAGFLOW_DEBUGPY_LISTEN 环境变量）
+"""
+
 print("Start RAGFlow server...")
 
 import time
@@ -46,6 +59,18 @@ stop_event = threading.Event()
 RAGFLOW_DEBUGPY_LISTEN = int(os.environ.get('RAGFLOW_DEBUGPY_LISTEN', "0"))
 
 def update_progress():
+    """
+    后台任务：定期更新文档解析进度
+
+    该函数在独立的线程中运行，每隔6秒使用Redis分布式锁更新一次
+    文档解析进度。确保只有一个实例在执行更新操作。
+
+    功能：
+    - 使用Redis分布式锁避免多实例冲突
+    - 调用 DocumentService.update_progress() 更新进度
+    - 捕获并记录异常
+    - 等待 stop_event 信号时停止运行
+    """
     lock_value = str(uuid.uuid4())
     redis_lock = RedisDistributedLock("update_progress", lock_value=lock_value, timeout=60)
     logging.info(f"update_progress lock_value: {lock_value}")
@@ -64,6 +89,19 @@ def update_progress():
             stop_event.wait(6)
 
 def signal_handler(sig, frame):
+    """
+    信号处理函数：处理系统中断信号
+
+    当接收到中断信号（如 Ctrl+C）时，执行以下操作：
+    - 关闭所有 MCP 会话
+    - 设置停止事件标志
+    - 等待1秒让后台任务清理
+    - 退出程序
+
+    参数：
+        sig: 信号编号
+        frame: 当前堆栈帧
+    """
     logging.info("Received interrupt signal, shutting down...")
     shutdown_all_mcp_sessions()
     stop_event.set()

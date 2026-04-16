@@ -13,3 +13,15 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+
+"""
+RAGFlow 设置模块
+
+该模块负责管理 RAGFlow 系统的所有配置设置。
+
+主要功能：
+- 从环境变量和配置文件中加载配置
+- 管理数据库连接、存储连接、Redis 连接等
+- 提供配置验证和默认值
+- 支持配置热重载
+"""

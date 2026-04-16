@@ -13,6 +13,23 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License
 #
+"""
+文档管理模块
+
+本模块提供文档（Document）相关的API接口，包括：
+- 文档上传（本地文件、网页抓取）
+- 文档创建（虚拟文档）
+- 文档列表查询（支持多种过滤条件）
+- 文档信息查询
+- 文档元数据管理
+- 文档状态变更
+- 文档删除
+- 文档解析运行
+- 文档下载
+- 解析器变更
+- 图片/附件获取
+- 文件上传信息查询
+"""
 import json
 import os.path
 import re
@@ -67,6 +84,18 @@ def _is_safe_download_filename(name: str) -> bool:
 @login_required
 @validate_request("kb_id")
 async def upload():
+    """
+    上传文档到知识库
+
+    功能：将本地文件上传到指定知识库
+
+    参数：
+        - kb_id: 知识库ID
+        - file: 上传的文件（支持多文件）
+
+    返回：
+        - 上传成功的文件列表
+    """
     form = await request.form
     kb_id = form.get("kb_id")
     if not kb_id:
@@ -117,6 +146,19 @@ async def upload():
 @login_required
 @validate_request("kb_id", "name", "url")
 async def web_crawl():
+    """
+    网页抓取并创建文档
+
+    功能：从指定URL抓取网页内容，转换为PDF并保存为文档
+
+    参数：
+        - kb_id: 知识库ID
+        - name: 文档名称
+        - url: 网页URL
+
+    返回：
+        - 操作结果
+    """
     form = await request.form
     kb_id = form.get("kb_id")
     if not kb_id:
@@ -183,6 +225,18 @@ async def web_crawl():
 @login_required
 @validate_request("name", "kb_id")
 async def create():
+    """
+    创建虚拟文档
+
+    功能：在知识库中创建一个虚拟文档（不关联实际文件）
+
+    参数：
+        - kb_id: 知识库ID
+        - name: 文档名称
+
+    返回：
+        - 创建的文档信息
+    """
     req = await get_request_json()
     kb_id = req["kb_id"]
     if not kb_id:
@@ -239,6 +293,30 @@ async def create():
 @manager.route("/list", methods=["POST"])  # noqa: F821
 @login_required
 async def list_docs():
+    """
+    获取知识库文档列表
+
+    功能：查询知识库中的文档列表，支持关键词搜索、状态过滤、类型过滤等多种条件
+
+    参数：
+        - id: 知识库ID
+        - keywords: 关键词搜索
+        - page: 页码
+        - page_size: 每页数量
+        - orderby: 排序字段
+        - desc: 是否降序
+        - create_time_from: 创建时间起始
+        - create_time_to: 创建时间结束
+        - run_status: 运行状态过滤
+        - types: 文档类型过滤
+        - suffix: 文件后缀过滤
+        - metadata_condition: 元数据条件过滤
+        - metadata: 元数据值过滤
+        - return_empty_metadata: 是否返回无元数据文档
+
+    返回：
+        - 文档列表和总数
+    """
     kb_id = request.args.get("id")
     if not kb_id:
         return get_json_result(data=False, message='Dataset ID is required for listing files.', code=RetCode.ARGUMENT_ERROR)
@@ -372,6 +450,21 @@ async def list_docs():
 @manager.route("/filter", methods=["POST"])  # noqa: F821
 @login_required
 async def get_filter():
+    """
+    获取文档过滤选项
+
+    功能：获取知识库文档的过滤条件选项（状态、类型、后缀等）
+
+    参数：
+        - kb_id: 知识库ID
+        - keywords: 关键词搜索
+        - run_status: 运行状态过滤
+        - types: 文档类型过滤
+        - suffix: 文件后缀过滤
+
+    返回：
+        - 过滤选项和文档总数
+    """
     req = await get_request_json()
 
     kb_id = req.get("kb_id")
@@ -410,6 +503,17 @@ async def get_filter():
 @manager.route("/infos", methods=["POST"])  # noqa: F821
 @login_required
 async def doc_infos():
+    """
+    批量获取文档信息
+
+    功能：根据文档ID列表批量查询文档详细信息
+
+    参数：
+        - doc_ids: 文档ID列表
+
+    返回：
+        - 文档详细信息列表（包含元数据字段）
+    """
     req = await get_request_json()
     doc_ids = req["doc_ids"]
     for doc_id in doc_ids:
@@ -427,6 +531,20 @@ async def doc_infos():
 @login_required
 @validate_request("doc_ids")
 async def metadata_update():
+    """
+    批量更新文档元数据
+
+    功能：批量更新或删除文档的元数据字段
+
+    参数：
+        - kb_id: 知识库ID
+        - doc_ids: 文档ID列表
+        - updates: 要更新的元数据列表 [{key, value}]
+        - deletes: 要删除的元数据列表 [{key}]
+
+    返回：
+        - 更新结果（更新的文档数、匹配的文档数）
+    """
     req = await get_request_json()
     kb_id = req.get("kb_id")
     document_ids = req.get("doc_ids")
@@ -454,6 +572,18 @@ async def metadata_update():
 @login_required
 @validate_request("doc_id", "metadata")
 async def update_metadata_setting():
+    """
+    更新文档元数据配置
+
+    功能：更新单个文档的元数据字段配置
+
+    参数：
+        - doc_id: 文档ID
+        - metadata: 元数据配置
+
+    返回：
+        - 更新后的文档信息
+    """
     req = await get_request_json()
     if not DocumentService.accessible(req["doc_id"], current_user.id):
         return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
@@ -473,6 +603,17 @@ async def update_metadata_setting():
 @manager.route("/thumbnails", methods=["GET"])  # noqa: F821
 # @login_required
 def thumbnails():
+    """
+    批量获取文档缩略图
+
+    功能：根据文档ID列表批量查询文档缩略图
+
+    参数：
+        - doc_ids: 文档ID列表
+
+    返回：
+        - 文档ID到缩略图URL的映射
+    """
     doc_ids = request.args.getlist("doc_ids")
     if not doc_ids:
         return get_json_result(data=False, message='Lack of "Document ID"', code=RetCode.ARGUMENT_ERROR)
@@ -493,6 +634,18 @@ def thumbnails():
 @login_required
 @validate_request("doc_ids", "status")
 async def change_status():
+    """
+    批量变更文档状态
+
+    功能：批量启用或禁用文档，同步更新文档存储中的可用性状态
+
+    参数：
+        - doc_ids: 文档ID列表
+        - status: 状态值（0=禁用，1=启用）
+
+    返回：
+        - 各文档的操作结果
+    """
     req = await get_request_json()
     doc_ids = req.get("doc_ids", [])
     status = str(req.get("status", ""))
@@ -563,6 +716,17 @@ async def change_status():
 @login_required
 @validate_request("doc_id")
 async def rm():
+    """
+    删除文档
+
+    功能：删除指定文档及其关联的数据
+
+    参数：
+        - doc_id: 文档ID或文档ID列表
+
+    返回：
+        - 操作结果
+    """
     req = await get_request_json()
     doc_ids = req["doc_id"]
     if isinstance(doc_ids, str):
@@ -584,6 +748,20 @@ async def rm():
 @login_required
 @validate_request("doc_ids", "run")
 async def run():
+    """
+    运行或取消文档解析任务
+
+    功能：启动文档解析任务或取消正在运行的任务
+
+    参数：
+        - doc_ids: 文档ID列表
+        - run: 运行状态（"0"=取消，"1"=运行）
+        - delete: 是否在运行前删除现有解析结果（可选）
+        - apply_kb: 是否应用知识库的解析器配置（可选）
+
+    返回：
+        - 操作结果
+    """
     req = await get_request_json()
     uid = current_user.id
     try:
@@ -645,6 +823,17 @@ async def run():
 @manager.route("/get/<doc_id>", methods=["GET"])  # noqa: F821
 @login_required
 async def get(doc_id):
+    """
+    获取文档文件内容
+
+    功能：下载指定文档的原始文件
+
+    参数：
+        - doc_id: 文档ID
+
+    返回：
+        - 文件内容响应
+    """
     try:
         e, doc = DocumentService.get_by_id(doc_id)
         if not e:
@@ -669,6 +858,18 @@ async def get(doc_id):
 @manager.route("/download/<attachment_id>", methods=["GET"])  # noqa: F821
 @login_required
 async def download_attachment(attachment_id):
+    """
+    下载附件
+
+    功能：下载指定附件文件
+
+    参数：
+        - attachment_id: 附件ID
+        - ext: 文件扩展名（默认markdown）
+
+    返回：
+        - 附件文件内容响应
+    """
     try:
         ext = request.args.get("ext", "markdown")
         data = await thread_pool_exec(settings.STORAGE_IMPL.get, current_user.id, attachment_id)
@@ -686,6 +887,20 @@ async def download_attachment(attachment_id):
 @login_required
 @validate_request("doc_id")
 async def change_parser():
+    """
+    更改文档解析器
+
+    功能：更换文档的解析器类型或配置，并清除现有解析结果
+
+    参数：
+        - doc_id: 文档ID
+        - parser_id: 解析器ID
+        - pipeline_id: 管道ID（可选）
+        - parser_config: 解析器配置（可选）
+
+    返回：
+        - 操作结果
+    """
     req = await get_request_json()
     if not DocumentService.accessible(req["doc_id"], current_user.id):
         return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
@@ -739,6 +954,17 @@ async def change_parser():
 @manager.route("/image/<image_id>", methods=["GET"])  # noqa: F821
 # @login_required
 async def get_image(image_id):
+    """
+    获取文档图片
+
+    功能：获取文档关联的图片文件
+
+    参数：
+        - image_id: 图片ID（格式：kb_id-chunk_id）
+
+    返回：
+        - 图片内容响应
+    """
     try:
         arr = image_id.split("-")
         if len(arr) != 2:
@@ -767,6 +993,17 @@ ARTIFACT_CONTENT_TYPES = {
 @manager.route("/artifact/<filename>", methods=["GET"])  # noqa: F821
 @login_required
 async def get_artifact(filename):
+    """
+    获取沙箱产物文件
+
+    功能：获取沙箱执行产生的文件（图片、PDF等）
+
+    参数：
+        - filename: 文件名
+
+    返回：
+        - 文件内容响应
+    """
     try:
         bucket = SANDBOX_ARTIFACT_BUCKET
         # Validate filename: must be uuid hex + allowed extension, nothing else
@@ -794,6 +1031,18 @@ async def get_artifact(filename):
 @login_required
 @validate_request("conversation_id")
 async def upload_and_parse():
+    """
+    上传并解析文档
+
+    功能：上传文件并立即进行解析，用于对话场景
+
+    参数：
+        - conversation_id: 对话ID
+        - file: 上传的文件
+
+    返回：
+        - 文档ID列表
+    """
     files = await request.files
     if "file" not in files:
         return get_json_result(data=False, message="No file part!", code=RetCode.ARGUMENT_ERROR)
@@ -811,6 +1060,18 @@ async def upload_and_parse():
 @manager.route("/parse", methods=["POST"])  # noqa: F821
 @login_required
 async def parse():
+    """
+    解析文档内容
+
+    功能：解析上传的文件或指定URL的内容，提取文本信息
+
+    参数：
+        - url: 网页URL（可选）
+        - file: 上传的文件（可选）
+
+    返回：
+        - 解析后的文本内容
+    """
     req = await get_request_json()
     url = req.get("url", "")
     if url:
@@ -871,6 +1132,18 @@ async def parse():
 @login_required
 @validate_request("doc_id", "meta")
 async def set_meta():
+    """
+    设置文档元数据
+
+    功能：为文档设置自定义元数据
+
+    参数：
+        - doc_id: 文档ID
+        - meta: 元数据JSON字符串
+
+    返回：
+        - 操作结果
+    """
     req = await get_request_json()
     if not DocumentService.accessible(req["doc_id"], current_user.id):
         return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
@@ -905,6 +1178,18 @@ async def set_meta():
 @manager.route("/upload_info", methods=["POST"])  # noqa: F821
 @login_required
 async def upload_info():
+    """
+    获取文件上传信息
+
+    功能：获取文件的基本信息，用于上传前预检查
+
+    参数：
+        - file: 上传的文件（可选）
+        - url: 文件URL（可选）
+
+    返回：
+        - 文件信息（文件名、大小、类型等）
+    """
     files = await request.files
     file_objs = files.getlist("file") if files and files.get("file") else []
     url = request.args.get("url")

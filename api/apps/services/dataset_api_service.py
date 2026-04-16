@@ -13,6 +13,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""数据集 API 服务模块
+
+该模块提供了数据集（知识库）管理的核心功能，包括创建、删除、更新、查询数据集，
+以及知识图谱、GraphRAG、RAPTOR 等高级功能。
+"""
+
 import logging
 import json
 import os
@@ -31,12 +37,14 @@ from api.utils.api_utils import deep_merge, get_parser_config, remap_dictionary_
 
 
 async def create_dataset(tenant_id: str, req: dict):
-    """
-    Create a new dataset.
+    """创建新数据集
 
-    :param tenant_id: tenant ID
-    :param req: dataset creation request
-    :return: (success, result) or (success, error_message)
+    Args:
+        tenant_id: 租户 ID
+        req: 数据集创建请求，包含名称、解析器 ID 等信息
+
+    Returns:
+        (成功标志, 结果字典) 或 (成功标志, 错误信息)
     """
     # Extract ext field for additional parameters
     ext_fields = req.pop("ext", {})
@@ -92,13 +100,15 @@ async def create_dataset(tenant_id: str, req: dict):
 
 
 async def delete_datasets(tenant_id: str, ids: list = None, delete_all: bool = False):
-    """
-    Delete datasets.
+    """删除数据集
 
-    :param tenant_id: tenant ID
-    :param ids: list of dataset IDs
-    :param delete_all: whether to delete all datasets of the tenant (if ids is not provided)
-    :return: (success, result) or (success, error_message)
+    Args:
+        tenant_id: 租户 ID
+        ids: 数据集 ID 列表，为空时根据 delete_all 参数决定
+        delete_all: 是否删除租户的所有数据集（当 ids 为空时）
+
+    Returns:
+        (成功标志, 结果字典) 或 (成功标志, 错误信息)
     """
     kb_id_instance_pairs = []
     if not ids:
@@ -159,13 +169,15 @@ async def delete_datasets(tenant_id: str, ids: list = None, delete_all: bool = F
 
 
 async def update_dataset(tenant_id: str, dataset_id: str, req: dict):
-    """
-    Update a dataset.
+    """更新数据集
 
-    :param tenant_id: tenant ID
-    :param dataset_id: dataset ID
-    :param req: dataset update request
-    :return: (success, result) or (success, error_message)
+    Args:
+        tenant_id: 租户 ID
+        dataset_id: 数据集 ID
+        req: 数据集更新请求，包含需要更新的字段
+
+    Returns:
+        (成功标志, 结果字典) 或 (成功标志, 错误信息)
     """
     if not req:
         return False, "No properties were modified"
@@ -277,12 +289,14 @@ async def update_dataset(tenant_id: str, dataset_id: str, req: dict):
 
 
 def list_datasets(tenant_id: str, args: dict):
-    """
-    List datasets.
+    """列出数据集
 
-    :param tenant_id: tenant ID
-    :param args: query arguments
-    :return: (success, result) or (success, error_message)
+    Args:
+        tenant_id: 租户 ID
+        args: 查询参数，包含分页、排序、关键词等信息
+
+    Returns:
+        (成功标志, 结果字典) 或 (成功标志, 错误信息)
     """
     kb_id = args.get("id")
     name = args.get("name")
@@ -340,12 +354,14 @@ def list_datasets(tenant_id: str, args: dict):
 
 
 async def get_knowledge_graph(dataset_id: str, tenant_id: str):
-    """
-    Get knowledge graph for a dataset.
+    """获取数据集的知识图谱
 
-    :param dataset_id: dataset ID
-    :param tenant_id: tenant ID
-    :return: (success, result) or (success, error_message)
+    Args:
+        dataset_id: 数据集 ID
+        tenant_id: 租户 ID
+
+    Returns:
+        (成功标志, 知识图谱数据) 或 (成功标志, 错误信息)
     """
     if not KnowledgebaseService.accessible(dataset_id, tenant_id):
         return False, "No authorization."
@@ -384,12 +400,14 @@ async def get_knowledge_graph(dataset_id: str, tenant_id: str):
 
 
 def delete_knowledge_graph(dataset_id: str, tenant_id: str):
-    """
-    Delete knowledge graph for a dataset.
+    """删除数据集的知识图谱
 
-    :param dataset_id: dataset ID
-    :param tenant_id: tenant ID
-    :return: (success, result) or (success, error_message)
+    Args:
+        dataset_id: 数据集 ID
+        tenant_id: 租户 ID
+
+    Returns:
+        (成功标志, 结果) 或 (成功标志, 错误信息)
     """
     if not KnowledgebaseService.accessible(dataset_id, tenant_id):
         return False, "No authorization."
@@ -402,12 +420,14 @@ def delete_knowledge_graph(dataset_id: str, tenant_id: str):
 
 
 def run_graphrag(dataset_id: str, tenant_id: str):
-    """
-    Run GraphRAG for a dataset.
+    """运行数据集的 GraphRAG 任务
 
-    :param dataset_id: dataset ID
-    :param tenant_id: tenant ID
-    :return: (success, result) or (success, error_message)
+    Args:
+        dataset_id: 数据集 ID
+        tenant_id: 租户 ID
+
+    Returns:
+        (成功标志, 任务信息) 或 (成功标志, 错误信息)
     """
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
@@ -453,12 +473,14 @@ def run_graphrag(dataset_id: str, tenant_id: str):
 
 
 def trace_graphrag(dataset_id: str, tenant_id: str):
-    """
-    Trace GraphRAG task for a dataset.
+    """追踪数据集的 GraphRAG 任务状态
 
-    :param dataset_id: dataset ID
-    :param tenant_id: tenant ID
-    :return: (success, result) or (success, error_message)
+    Args:
+        dataset_id: 数据集 ID
+        tenant_id: 租户 ID
+
+    Returns:
+        (成功标志, 任务信息) 或 (成功标志, 错误信息)
     """
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
@@ -481,12 +503,14 @@ def trace_graphrag(dataset_id: str, tenant_id: str):
 
 
 def run_raptor(dataset_id: str, tenant_id: str):
-    """
-    Run RAPTOR for a dataset.
+    """运行数据集的 RAPTOR 任务
 
-    :param dataset_id: dataset ID
-    :param tenant_id: tenant ID
-    :return: (success, result) or (success, error_message)
+    Args:
+        dataset_id: 数据集 ID
+        tenant_id: 租户 ID
+
+    Returns:
+        (成功标志, 任务信息) 或 (成功标志, 错误信息)
     """
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
@@ -532,12 +556,14 @@ def run_raptor(dataset_id: str, tenant_id: str):
 
 
 def trace_raptor(dataset_id: str, tenant_id: str):
-    """
-    Trace RAPTOR task for a dataset.
+    """追踪数据集的 RAPTOR 任务状态
 
-    :param dataset_id: dataset ID
-    :param tenant_id: tenant ID
-    :return: (success, result) or (success, error_message)
+    Args:
+        dataset_id: 数据集 ID
+        tenant_id: 租户 ID
+
+    Returns:
+        (成功标志, 任务信息) 或 (成功标志, 错误信息)
     """
     if not dataset_id:
         return False, 'Lack of "Dataset ID"'
@@ -561,12 +587,14 @@ def trace_raptor(dataset_id: str, tenant_id: str):
 
 
 def get_auto_metadata(dataset_id: str, tenant_id: str):
-    """
-    Get auto-metadata configuration for a dataset.
+    """获取数据集的自动元数据配置
 
-    :param dataset_id: dataset ID
-    :param tenant_id: tenant ID
-    :return: (success, result) or (success, error_message)
+    Args:
+        dataset_id: 数据集 ID
+        tenant_id: 租户 ID
+
+    Returns:
+        (成功标志, 配置信息) 或 (成功标志, 错误信息)
     """
     kb = KnowledgebaseService.get_or_none(id=dataset_id, tenant_id=tenant_id)
     if kb is None:
@@ -593,13 +621,15 @@ def get_auto_metadata(dataset_id: str, tenant_id: str):
 
 
 async def update_auto_metadata(dataset_id: str, tenant_id: str, cfg: dict):
-    """
-    Update auto-metadata configuration for a dataset.
+    """更新数据集的自动元数据配置
 
-    :param dataset_id: dataset ID
-    :param tenant_id: tenant ID
-    :param cfg: auto-metadata configuration
-    :return: (success, result) or (success, error_message)
+    Args:
+        dataset_id: 数据集 ID
+        tenant_id: 租户 ID
+        cfg: 自动元数据配置
+
+    Returns:
+        (成功标志, 配置信息) 或 (成功标志, 错误信息)
     """
     kb = KnowledgebaseService.get_or_none(id=dataset_id, tenant_id=tenant_id)
     if kb is None:

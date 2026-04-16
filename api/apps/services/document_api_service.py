@@ -13,6 +13,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""文档 API 服务模块
+
+该模块提供了文档管理的核心功能，包括文档名称更新、分块方法更新、
+状态更新、字段验证等辅助函数。
+"""
+
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
 from api.db.services.file_service import FileService
@@ -25,11 +31,14 @@ from rag.nlp import rag_tokenizer, search
 
 
 def update_document_name_only(document_id, req_doc_name):
-    """
-    Update document name only (without validation).
-    :param document_id: id (string) of the document
-    :param req_doc_name: new name (string) from request for the document
-    :return: None if all are good; otherwise returns the error message in the JSON format
+    """仅更新文档名称（不进行验证）
+
+    Args:
+        document_id: 文档 ID（字符串）
+        req_doc_name: 请求中的新文档名称（字符串）
+
+    Returns:
+        成功时返回 None，失败时返回 JSON 格式的错误信息
     """
     if not DocumentService.update_by_id(document_id, {"name": req_doc_name}):
         return get_error_data_result(message="Database error (Document rename)!")
@@ -59,21 +68,19 @@ def update_document_name_only(document_id, req_doc_name):
     return None
 
 def update_chunk_method_only(req, doc, dataset_id, tenant_id):
-    """
-    Update chunk method only (without validation).
+    """仅更新分块方法（不进行验证）
 
-    Updates the chunk method and parser configuration for a document,
-    and resets the document's progress if the chunk method changes.
-    Also clears existing chunks from the document store if the method changes.
+    更新文档的分块方法和解析器配置，如果分块方法发生变化则重置文档进度。
+    如果方法发生变化，还会清除文档存储中现有的分块。
 
     Args:
-        req: The request dictionary containing chunk_method and parser_config.
-        doc: The document model from the database.
-        dataset_id: The ID of the dataset containing the document.
-        tenant_id: The tenant ID for the document store.
+        req: 包含 chunk_method 和 parser_config 的请求字典
+        doc: 数据库中的文档模型
+        dataset_id: 包含该文档的数据集 ID
+        tenant_id: 文档存储的租户 ID
 
     Returns:
-        None if successful, or an error result dictionary if failed.
+        成功时返回 None，失败时返回错误结果字典
     """
     if doc.parser_id.lower() != req["chunk_method"].lower():
         # if chunk method changed
@@ -105,19 +112,17 @@ def update_chunk_method_only(req, doc, dataset_id, tenant_id):
     return None
 
 def update_document_status_only(status:int, doc, kb):
-    """
-    Update document status only (without validation).
+    """仅更新文档状态（不进行验证）
 
-    Updates the enabled/disabled status of a document and updates
-    the corresponding index in the document store.
+    更新文档的启用/禁用状态，并更新文档存储中的相应索引。
 
     Args:
-        status: The new status value (0 for disabled, 1 for enabled).
-        doc: The document model from the database.
-        kb: The knowledge base model.
+        status: 新的状态值（0 表示禁用，1 表示启用）
+        doc: 数据库中的文档模型
+        kb: 知识库模型
 
     Returns:
-        None if successful, or an error result dictionary if failed.
+        成功时返回 None，失败时返回错误结果字典
     """
     if doc.status is None or (int(doc.status) != status):
         try:
@@ -130,20 +135,18 @@ def update_document_status_only(status:int, doc, kb):
 
 
 def validate_document_update_fields(update_doc_req:UpdateDocumentReq, doc, req):
-    """
-    Validate document update fields in a single method.
+    """在单个方法中验证文档更新字段
 
-    Performs comprehensive validation of all document update fields,
-    including immutable fields, document name, and chunk method.
+    对所有文档更新字段进行综合验证，包括不可变字段、文档名称和分块方法。
 
     Args:
-        update_doc_req: The validated update document request.
-        doc: The document model from the database.
-        req: The original request dictionary.
+        update_doc_req: 经过验证的更新文档请求
+        doc: 数据库中的文档模型
+        req: 原始请求字典
 
     Returns:
-        A tuple of (error_message, error_code) if validation fails,
-        or (None, None) if validation passes.
+        验证失败时返回 (错误消息, 错误代码) 元组，
+        验证通过时返回 (None, None)
     """
     # Validate immutable fields
     error_msg, error_code = validation_utils.validate_immutable_fields(update_doc_req, doc)
@@ -166,17 +169,16 @@ def validate_document_update_fields(update_doc_req:UpdateDocumentReq, doc, req):
     return None, None
 
 def rename_doc_key(doc):
-    """
-    Rename document keys to match API response format.
+    """重命名文档键以匹配 API 响应格式
 
-    Converts internal document model field names to the external API
-    response field names (e.g., 'chunk_num' -> 'chunk_count').
+    将内部文档模型字段名称转换为外部 API 响应字段名称
+    （例如 'chunk_num' -> 'chunk_count'）。
 
     Args:
-        doc: The document model from the database.
+        doc: 数据库中的文档模型
 
     Returns:
-        A dictionary with renamed keys for API response.
+        包含重命名键的字典，用于 API 响应
     """
     key_mapping = {
         "chunk_num": "chunk_count",

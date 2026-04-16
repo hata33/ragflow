@@ -13,6 +13,23 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+File RESTful API 模块
+
+本模块提供文件（File）相关的 RESTful API 接口，包括：
+- 上传文件或创建文件夹
+- 列出文件夹下的文件
+- 删除文件
+- 移动和重命名文件
+- 下载文件
+- 查询父文件夹和祖先文件夹
+
+主要功能：
+- 文件的 CRUD 操作
+- 文件夹层级管理
+- 文件上传和下载
+- 文件移动（支持 Linux mv 语义）
+"""
 import logging
 import re
 

@@ -13,6 +13,18 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+
+"""
+连接器（Connector）应用API端点模块
+
+提供外部数据源连接的REST API功能，包括：
+- 连接器的创建、查询、更新、删除
+- 连接器的同步控制（暂停、恢复、重建）
+- 同步日志查询
+- Google Drive/Gmail OAuth认证
+- Box OAuth认证
+"""
+
 import asyncio
 import json
 import logging
@@ -39,6 +51,21 @@ from box_sdk_gen import BoxOAuth, OAuthConfig, GetAuthorizeUrlOptions
 @manager.route("/set", methods=["POST"])  # noqa: F821
 @login_required
 async def set_connector():
+    """
+    创建或更新连接器
+
+    Args:
+        id: 连接器ID（更新时需要）
+        name: 连接器名称
+        source: 数据源类型
+        config: 连接器配置
+        refresh_freq: 刷新频率（分钟）
+        prune_freq: 清理频率（分钟）
+        timeout_secs: 超时时间（秒）
+
+    Returns:
+        JSON响应，包含创建或更新的连接器信息
+    """
     req = await get_request_json()
     if req.get("id"):
         conn = {fld: req[fld] for fld in ["prune_freq", "refresh_freq", "config", "timeout_secs"] if fld in req}
@@ -68,12 +95,27 @@ async def set_connector():
 @manager.route("/list", methods=["GET"])  # noqa: F821
 @login_required
 def list_connector():
+    """
+    获取当前用户的所有连接器列表
+
+    Returns:
+        JSON响应，包含连接器列表
+    """
     return get_json_result(data=ConnectorService.list(current_user.id))
 
 
 @manager.route("/<connector_id>", methods=["GET"])  # noqa: F821
 @login_required
 def get_connector(connector_id):
+    """
+    获取指定连接器的详情
+
+    Args:
+        connector_id: 连接器ID
+
+    Returns:
+        JSON响应，包含连接器的详细信息
+    """
     e, conn = ConnectorService.get_by_id(connector_id)
     if not e:
         return get_data_error_result(message="Can't find this Connector!")
@@ -83,6 +125,19 @@ def get_connector(connector_id):
 @manager.route("/<connector_id>/logs", methods=["GET"])  # noqa: F821
 @login_required
 def list_logs(connector_id):
+    """
+    获取连接器的同步日志
+
+    Args:
+        connector_id: 连接器ID
+
+    Query Params:
+        page: 页码（默认1）
+        page_size: 每页数量（默认15）
+
+    Returns:
+        JSON响应，包含日志列表和总数
+    """
     req = request.args.to_dict(flat=True)
     arr, total = SyncLogsService.list_sync_tasks(connector_id, int(req.get("page", 1)), int(req.get("page_size", 15)))
     return get_json_result(data={"total": total, "logs": arr})
@@ -91,6 +146,16 @@ def list_logs(connector_id):
 @manager.route("/<connector_id>/resume", methods=["PUT"])  # noqa: F821
 @login_required
 async def resume(connector_id):
+    """
+    恢复或暂停连接器
+
+    Args:
+        connector_id: 连接器ID
+        resume: true为恢复，false为暂停
+
+    Returns:
+        JSON响应，操作成功返回True
+    """
     req = await get_request_json()
     if req.get("resume"):
         ConnectorService.resume(connector_id, TaskStatus.SCHEDULE)
@@ -103,6 +168,16 @@ async def resume(connector_id):
 @login_required
 @validate_request("kb_id")
 async def rebuild(connector_id):
+    """
+    重建连接器关联的知识库
+
+    Args:
+        connector_id: 连接器ID
+        kb_id: 知识库ID
+
+    Returns:
+        JSON响应，重建成功返回True
+    """
     req = await get_request_json()
     err = ConnectorService.rebuild(req["kb_id"], connector_id, current_user.id)
     if err:
@@ -113,6 +188,15 @@ async def rebuild(connector_id):
 @manager.route("/<connector_id>/rm", methods=["POST"])  # noqa: F821
 @login_required
 def rm_connector(connector_id):
+    """
+    删除连接器
+
+    Args:
+        connector_id: 连接器ID
+
+    Returns:
+        JSON响应，删除成功返回True
+    """
     ConnectorService.resume(connector_id, TaskStatus.CANCEL)
     ConnectorService.delete_by_id(connector_id)
     return get_json_result(data=True)
