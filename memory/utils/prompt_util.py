@@ -13,10 +13,17 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+提示词组装工具模块
+
+提供 LLM 提示词的组装功能，用于内存提取任务。
+支持语义知识、情景知识、程序知识三种类型的提取。
+"""
 from typing import Optional, List
 
 from common.constants import MemoryType
 from common.time_utils import current_timestamp
+
 
 class PromptAssembler:
 

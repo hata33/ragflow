@@ -14,7 +14,11 @@
 #  limitations under the License.
 #
 
-"""Highlight helpers for search results (wraps keywords in <em>)."""
+"""
+高亮工具模块
+
+为搜索结果提供关键词高亮功能（用 <em> 标签包裹）。
+"""
 
 import re
 from collections.abc import Callable
@@ -25,11 +29,17 @@ def highlight_text(
     keywords: list[str],
     is_english_fn: Callable[[str], bool] | None = None,
 ) -> str:
-    """Wrap keyword matches in text with <em>, by sentence.
+    """
+    将文本中的关键词用 <em> 标签高亮，按句子处理
 
-    - If is_english_fn(sentence) is True: use word-boundary regex.
-    - Otherwise: literal replace (longest keywords first).
-    Only sentences that contain a match are included.
+    - 如果 is_english_fn(sentence) 为 True：使用单词边界正则表达式
+    - 否则：字面替换（优先处理长关键词）
+    - 仅返回包含匹配项的句子
+
+    :param txt: 原始文本
+    :param keywords: 关键词列表
+    :param is_english_fn: 判断是否为英文句子的函数
+    :return: 高亮后的文本
     """
     if not txt or not keywords:
         return ""
@@ -71,7 +81,15 @@ def get_highlight_from_messages(
     field_name: str,
     is_english_fn: Callable[[str], bool] | None = None,
 ) -> dict[str, str]:
-    """Build id -> highlighted text from a list of message dicts."""
+    """
+    从消息列表构建 id -> 高亮文本的映射
+
+    :param messages: 消息字典列表
+    :param keywords: 关键词列表
+    :param field_name: 需要高亮的字段名
+    :param is_english_fn: 判断是否为英文的函数
+    :return: {消息ID: 高亮文本} 的字典
+    """
     if not messages or not keywords:
         return {}
 

@@ -13,6 +13,17 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+知识库服务模块
+
+本模块提供知识库（Knowledgebase/Dataset）的核心业务逻辑，包括：
+- 知识库的增删改查
+- 文档解析状态跟踪
+- 访问权限控制
+- 解析器配置管理
+- 租户级知识库组织
+- 字段映射管理（用于 SQL 检索）
+"""
 from datetime import datetime
 
 from peewee import fn, JOIN
@@ -30,21 +41,18 @@ from api.utils.api_utils import get_parser_config, get_data_error_result
 
 
 class KnowledgebaseService(CommonService):
-    """Service class for managing dataset operations.
+    """
+    知识库服务类
 
-    This class extends CommonService to provide specialized functionality for dataset
-    management, including document parsing status tracking, access control, and configuration
-    management. It handles operations such as listing, creating, updating, and deleting
-    knowledge bases, as well as managing their associated documents and permissions.
-
-    The class implements a comprehensive set of methods for:
-    - Document parsing status verification
-    - Knowledge base access control
-    - Parser configuration management
-    - Tenant-based dataset organization
+    扩展 CommonService 以提供知识库管理的专用功能，包括：
+    - 文档解析状态验证
+    - 知识库访问控制
+    - 解析器配置管理
+    - 租户级数据集组织
+    - 字段映射管理（用于 SQL 检索）
 
     Attributes:
-        model: The Knowledgebase model class for database operations.
+        model: Knowledgebase 数据库模型类
     """
     model = Knowledgebase
 

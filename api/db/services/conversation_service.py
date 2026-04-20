@@ -13,6 +13,15 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+对话会话服务模块
+
+本模块提供对话会话（Conversation）的业务逻辑，包括：
+- 会话的增删改查
+- 对话完成处理（流式和非流式）
+- 消息结构化处理
+- 与对话助手的交互
+"""
 import time
 from uuid import uuid4
 from common.constants import StatusEnum
@@ -27,11 +36,33 @@ from rag.prompts.generator import chunks_format
 
 
 class ConversationService(CommonService):
+    """
+    对话会话服务类
+
+    提供 Conversation（对话会话）的数据库操作方法。
+    一个对话助手（Dialog）可以有多个会话（Conversation）。
+
+    Attributes:
+        model: Conversation 数据库模型类
+    """
     model = Conversation
 
     @classmethod
     @DB.connection_context()
     def get_list(cls, dialog_id, page_number, items_per_page, orderby, desc, id, name, user_id=None):
+        """
+        获取对话会话列表
+
+        :param dialog_id: 对话助手 ID
+        :param page_number: 页码
+        :param items_per_page: 每页数量
+        :param orderby: 排序字段
+        :param desc: 是否降序
+        :param id: 会话 ID（可选）
+        :param name: 会话名称（可选）
+        :param user_id: 用户 ID（可选）
+        :return: 会话字典列表
+        """
         sessions = cls.model.select().where(cls.model.dialog_id == dialog_id)
         if id:
             sessions = sessions.where(cls.model.id == id)
@@ -52,6 +83,12 @@ class ConversationService(CommonService):
     @classmethod
     @DB.connection_context()
     def get_all_conversation_by_dialog_ids(cls, dialog_ids):
+        """
+        根据对话助手 ID 列表获取所有会话
+
+        :param dialog_ids: 对话助手 ID 列表
+        :return: 会话字典列表
+        """
         sessions = cls.model.select().where(cls.model.dialog_id.in_(dialog_ids))
         sessions.order_by(cls.model.create_time.asc())
         offset, limit = 0, 100
@@ -67,6 +104,17 @@ class ConversationService(CommonService):
 
 
 def structure_answer(conv, ans, message_id, session_id):
+    """
+    结构化回答数据
+
+    将 LLM 返回的答案格式化为标准结构，并更新会话消息历史。
+
+    :param conv: 会话对象（会被就地修改）
+    :param ans: LLM 返回的答案字典
+    :param message_id: 消息 ID
+    :param session_id: 会话 ID
+    :return: 格式化后的答案字典
+    """
     reference = ans["reference"]
     if not isinstance(reference, dict):
         reference = {}
@@ -111,6 +159,25 @@ def structure_answer(conv, ans, message_id, session_id):
 
 
 async def async_completion(tenant_id, chat_id, question, name="New session", session_id=None, stream=True, **kwargs):
+    """
+    异步对话完成（核心入口函数）
+
+    处理用户问题，创建或获取会话，调用对话助手生成回答。
+    支持流式和非流式输出。
+
+    :param tenant_id: 租户 ID
+    :param chat_id: 对话助手 ID
+    :param question: 用户问题
+    :param name: 会话名称（新建会话时使用，默认 "New session"）
+    :param session_id: 会话 ID（可选，不提供则创建新会话）
+    :param stream: 是否使用流式输出（默认 True）
+    :param **kwargs: 额外参数
+        - user_id: 用户 ID
+        - kb_ids: 额外的知识库 ID 列表
+        - files: 文件附件列表
+        - 其他传递给 async_chat 的参数
+    :yields: SSE 格式的数据流或单个答案字典
+    """
     assert name, "`name` can not be empty."
     dia = DialogService.query(id=chat_id, tenant_id=tenant_id, status=StatusEnum.VALID.value)
     assert dia, "You do not own the chat."
@@ -202,6 +269,21 @@ async def async_completion(tenant_id, chat_id, question, name="New session", ses
         yield answer
 
 async def async_iframe_completion(dialog_id, question, session_id=None, stream=True, **kwargs):
+    """
+    异步 iframe 嵌入式对话完成
+
+    用于 iframe 嵌入场景的对话接口，使用 API 会话服务。
+    支持流式和非流式输出。
+
+    :param dialog_id: 对话助手 ID
+    :param question: 用户问题
+    :param session_id: 会话 ID（可选，不提供则创建新会话）
+    :param stream: 是否使用流式输出（默认 True）
+    :param **kwargs: 额外参数
+        - user_id: 用户 ID
+        - 其他传递给 async_chat 的参数
+    :yields: SSE 格式的数据流或单个答案字典
+    """
     e, dia = DialogService.get_by_id(dialog_id)
     assert e, "Dialog not found"
     if not session_id:

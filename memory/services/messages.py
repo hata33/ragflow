@@ -13,6 +13,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+消息存储服务模块
+
+提供消息的增删改查、索引管理、消息搜索等功能。
+支持多种存储引擎（Elasticsearch/Infinity/OceanBase）的统一接口。
+"""
 import sys
 from typing import List
 
@@ -21,28 +27,69 @@ from common.constants import MemoryType
 from common.doc_store.doc_store_base import OrderByExpr, MatchExpr
 
 
-def index_name(uid: str): return f"memory_{uid}"
+def index_name(uid: str):
+    """生成用户专属的索引名称"""
+    return f"memory_{uid}"
 
 
 class MessageService:
+    """
+    消息服务类
+
+    提供消息的完整生命周期管理，包括：
+    - 索引管理（创建、检查、删除）
+    - 消息 CRUD 操作（插入、更新、删除、查询）
+    - 消息搜索（向量搜索、全文搜索）
+    - 内存管理（计算大小、FIFO 删除）
+    """
 
     @classmethod
     def has_index(cls, uid: str, memory_id: str):
+        """
+        检查指定用户的存储索引是否存在
+
+        :param uid: 用户 ID
+        :param memory_id: 内存 ID
+        :return: 索引是否存在
+        """
         index = index_name(uid)
         return settings.msgStoreConn.index_exist(index, memory_id)
 
     @classmethod
     def create_index(cls, uid: str, memory_id: str, vector_size: int):
+        """
+        创建存储索引
+
+        :param uid: 用户 ID
+        :param memory_id: 内存 ID
+        :param vector_size: 向量维度大小
+        :return: 创建结果
+        """
         index = index_name(uid)
         return settings.msgStoreConn.create_idx(index, memory_id, vector_size)
 
     @classmethod
     def delete_index(cls, uid: str, memory_id: str):
+        """
+        删除存储索引
+
+        :param uid: 用户 ID
+        :param memory_id: 内存 ID
+        :return: 删除结果
+        """
         index = index_name(uid)
         return settings.msgStoreConn.delete_idx(index, memory_id)
 
     @classmethod
     def insert_message(cls, messages: List[dict], uid: str, memory_id: str):
+        """
+        批量插入消息
+
+        :param messages: 消息列表
+        :param uid: 用户 ID
+        :param memory_id: 内存 ID
+        :return: 插入结果
+        """
         index = index_name(uid)
         [m.update({
             "id": f'{memory_id}_{m["message_id"]}',
@@ -52,6 +99,15 @@ class MessageService:
 
     @classmethod
     def update_message(cls, condition: dict, update_dict: dict, uid: str, memory_id: str):
+        """
+        根据条件更新消息
+
+        :param condition: 更新条件
+        :param update_dict: 更新内容
+        :param uid: 用户 ID
+        :param memory_id: 内存 ID
+        :return: 更新结果
+        """
         index = index_name(uid)
         if "status" in update_dict:
             update_dict["status"] = 1 if update_dict["status"] else 0
@@ -59,11 +115,30 @@ class MessageService:
 
     @classmethod
     def delete_message(cls, condition: dict, uid: str, memory_id: str):
+        """
+        根据条件删除消息
+
+        :param condition: 删除条件
+        :param uid: 用户 ID
+        :param memory_id: 内存 ID
+        :return: 删除结果
+        """
         index = index_name(uid)
         return settings.msgStoreConn.delete(condition, index, memory_id)
 
     @classmethod
     def list_message(cls, uid: str, memory_id: str, agent_ids: List[str]=None, keywords: str=None, page: int=1, page_size: int=50):
+        """
+        分页列出消息
+
+        :param uid: 用户 ID
+        :param memory_id: 内存 ID
+        :param agent_ids: 代理 ID 列表（可选）
+        :param keywords: 会话 ID 关键词（可选）
+        :param page: 页码
+        :param page_size: 每页大小
+        :return: 包含消息列表和总数的字典
+        """
         index = index_name(uid)
         filter_dict = {}
         if agent_ids:
@@ -119,6 +194,16 @@ class MessageService:
 
     @classmethod
     def get_recent_messages(cls, uid_list: List[str], memory_ids: List[str], agent_id: str, session_id: str, limit: int):
+        """
+        获取最近的对话消息
+
+        :param uid_list: 用户 ID 列表
+        :param memory_ids: 内存 ID 列表
+        :param agent_id: 代理 ID
+        :param session_id: 会话 ID
+        :param limit: 返回数量限制
+        :return: 最近消息列表
+        """
         index_names = [index_name(uid) for uid in uid_list]
         condition_dict = {
             "agent_id": agent_id,
@@ -148,6 +233,16 @@ class MessageService:
 
     @classmethod
     def search_message(cls, memory_ids: List[str], condition_dict: dict, uid_list: List[str], match_expressions:list[MatchExpr], top_n: int):
+        """
+        搜索消息（支持全文搜索和向量搜索）
+
+        :param memory_ids: 内存 ID 列表
+        :param condition_dict: 查询条件
+        :param uid_list: 用户 ID 列表
+        :param match_expressions: 匹配表达式列表（全文/向量）
+        :param top_n: 返回结果数量
+        :return: 搜索结果列表
+        """
         index_names = [index_name(uid) for uid in uid_list]
         # filter only valid messages by default
         if "status" not in condition_dict:
@@ -179,10 +274,23 @@ class MessageService:
 
     @staticmethod
     def calculate_message_size(message: dict):
+        """
+        计算单条消息的存储大小
+
+        :param message: 消息字典
+        :return: 消息大小（字节）
+        """
         return sys.getsizeof(message["content"]) + sys.getsizeof(message["content_embed"][0]) * len(message["content_embed"])
 
     @classmethod
     def calculate_memory_size(cls, memory_ids: List[str], uid_list: List[str]):
+        """
+        计算内存占用大小
+
+        :param memory_ids: 内存 ID 列表
+        :param uid_list: 用户 ID 列表
+        :return: 内存 ID -> 大小的映射字典
+        """
         index_names = [index_name(uid) for uid in uid_list]
         order_by = OrderByExpr()
         order_by.desc("valid_at")
@@ -211,6 +319,16 @@ class MessageService:
 
     @classmethod
     def pick_messages_to_delete_by_fifo(cls, memory_id: str, uid: str, size_to_delete: int):
+        """
+        按 FIFO 策略选择需要删除的消息
+
+        优先删除已标记为遗忘的消息，再按 valid_at 从旧到新删除。
+
+        :param memory_id: 内存 ID
+        :param uid: 用户 ID
+        :param size_to_delete: 需要删除的大小（字节）
+        :return: (消息 ID 列表, 实际删除大小)
+        """
         select_fields = ["message_id", "content", "content_embed"]
         _index_name = index_name(uid)
         res = settings.msgStoreConn.get_forgotten_messages(select_fields, _index_name, memory_id)
@@ -249,6 +367,14 @@ class MessageService:
 
     @classmethod
     def get_missing_field_messages(cls, memory_id: str, uid: str, field_name: str):
+        """
+        获取缺少指定字段的消息
+
+        :param memory_id: 内存 ID
+        :param uid: 用户 ID
+        :param field_name: 字段名称
+        :return: 消息列表
+        """
         select_fields = ["message_id", "content"]
         _index_name = index_name(uid)
         res = settings.msgStoreConn.get_missing_field_message(
@@ -264,12 +390,27 @@ class MessageService:
 
     @classmethod
     def get_by_message_id(cls, memory_id: str, message_id: int, uid: str):
+        """
+        根据消息 ID 获取消息
+
+        :param memory_id: 内存 ID
+        :param message_id: 消息 ID
+        :param uid: 用户 ID
+        :return: 消息字典
+        """
         index = index_name(uid)
         doc_id = f'{memory_id}_{message_id}'
         return settings.msgStoreConn.get(doc_id, index, [memory_id])
 
     @classmethod
     def get_max_message_id(cls, uid_list: List[str], memory_ids: List[str]):
+        """
+        获取当前最大的消息 ID
+
+        :param uid_list: 用户 ID 列表
+        :param memory_ids: 内存 ID 列表
+        :return: 最大消息 ID
+        """
         order_by = OrderByExpr()
         order_by.desc("message_id")
         index_names = [index_name(uid) for uid in uid_list]

@@ -13,6 +13,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+消息查询服务模块
+
+提供消息的文本查询和向量查询功能。
+支持中英文混合查询、同义词扩展、词权重计算等。
+"""
 import re
 import logging
 import json
@@ -24,6 +30,15 @@ from rag.nlp import rag_tokenizer, term_weight, synonym
 
 
 def get_vector(txt, emb_mdl, topk=10, similarity=0.1):
+    """
+    将文本转换为向量查询表达式
+
+    :param txt: 查询文本
+    :param emb_mdl: 嵌入模型
+    :param topk: 返回 top-k 结果
+    :param similarity: 相似度阈值
+    :return: MatchDenseExpr 向量匹配表达式
+    """
     if isinstance(similarity, str) and len(similarity) > 0:
         try:
             similarity = float(similarity)
@@ -41,8 +56,14 @@ def get_vector(txt, emb_mdl, topk=10, similarity=0.1):
 
 
 class MsgTextQuery(QueryBase):
+    """
+    消息文本查询类
+
+    支持中英文混合查询、词权重计算、同义词扩展等功能。
+    """
 
     def __init__(self):
+        """初始化文本查询处理器"""
         self.tw = term_weight.Dealer()
         self.syn = synonym.Dealer()
         self.query_fields = [
@@ -50,6 +71,14 @@ class MsgTextQuery(QueryBase):
         ]
 
     def question(self, txt, tbl="messages", min_match: float=0.6):
+        """
+        将文本转换为查询表达式
+
+        :param txt: 查询文本
+        :param tbl: 表名（默认 messages）
+        :param min_match: 最小匹配比例
+        :return: (MatchTextExpr, 关键词列表)
+        """
         original_query = txt
         txt = MsgTextQuery.add_space_between_eng_zh(txt)
         txt = re.sub(

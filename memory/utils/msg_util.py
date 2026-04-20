@@ -13,17 +13,23 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+消息工具模块
+
+提供 LLM 响应的 JSON 解析功能。
+"""
 import json
 
 
 def get_json_result_from_llm_response(response_str: str) -> dict:
     """
-    Parse the LLM response string to extract JSON content.
-    The function looks for the first and last curly braces to identify the JSON part.
-    If parsing fails, it returns an empty dictionary.
+    从 LLM 响应字符串中提取 JSON 内容
 
-    :param response_str: The response string from the LLM.
-    :return: A dictionary parsed from the JSON content in the response.
+    查找第一个和最后一个花括号来识别 JSON 部分。
+    如果解析失败，返回空字典。
+
+    :param response_str: LLM 响应字符串
+    :return: 从响应中解析出的 JSON 字典
     """
     try:
         clean_str = response_str.strip()

@@ -13,6 +13,26 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+数据库模型模块
+
+本模块定义了系统的核心数据库模型，基于 Peewee ORM 实现。
+
+主要功能：
+- 自定义字段类型（JSONField、ListField、SerializedField、LongTextField）
+- 基础模型类（BaseModel）提供通用的数据库操作方法
+- 数据库连接池管理（支持 MySQL、PostgreSQL、OceanBase）
+- 数据迁移支持
+- 模型字段类型判断和转换工具
+
+核心类：
+- TextFieldType: 文本字段类型枚举（针对不同数据库）
+- LongTextField: 长文本字段（自动适配数据库类型）
+- JSONField: JSON 字段（自动序列化/反序列化）
+- ListField: 列表字段（继承自 JSONField）
+- SerializedField: 序列化字段（支持 PICKLE 和 JSON）
+- BaseModel: 所有数据库模型的基类
+"""
 import hashlib
 import inspect
 import logging
@@ -59,21 +79,41 @@ from common.constants import ParserType
 from common import settings
 
 
+# 连续型字段类型集合（可用于范围查询）
 CONTINUOUS_FIELD_TYPE = {IntegerField, FloatField, DateTimeField}
+# 自动时间戳字段前缀集合
 AUTO_DATE_TIMESTAMP_FIELD_PREFIX = {"create", "start", "end", "update", "read_access", "write_access"}
 
 
 class TextFieldType(Enum):
+    """
+    文本字段类型枚举
+
+    根据数据库类型返回对应的 LONGTEXT/TEXT 类型。
+    """
     MYSQL = "LONGTEXT"
     OCEANBASE = "LONGTEXT"
     POSTGRES = "TEXT"
 
 
 class LongTextField(TextField):
+    """
+    长文本字段类
+
+    自动根据当前数据库类型选择合适的文本字段类型。
+    """
     field_type = TextFieldType[settings.DATABASE_TYPE.upper()].value
 
 
 class JSONField(LongTextField):
+    """
+    JSON 字段类
+
+    自动处理 JSON 数据的序列化（存入数据库）和反序列化（从数据库读取）。
+
+    Attributes:
+        default_value: 默认值为空字典
+    """
     default_value = {}
 
     def __init__(self, object_hook=None, object_pairs_hook=None, **kwargs):
@@ -82,21 +122,41 @@ class JSONField(LongTextField):
         super().__init__(**kwargs)
 
     def db_value(self, value):
+        """将 Python 对象转换为 JSON 字符串存入数据库"""
         if value is None:
             value = self.default_value
         return json_dumps(value)
 
     def python_value(self, value):
+        """将数据库中的 JSON 字符串转换为 Python 对象"""
         if not value:
             return self.default_value
         return json_loads(value, object_hook=self._object_hook, object_pairs_hook=self._object_pairs_hook)
 
 
 class ListField(JSONField):
+    """
+    列表字段类
+
+    继承自 JSONField，专门用于存储列表类型数据。
+
+    Attributes:
+        default_value: 默认值为空列表
+    """
     default_value = []
 
 
 class SerializedField(LongTextField):
+    """
+    序列化字段类
+
+    支持多种序列化方式（PICKLE、JSON）的字段类型。
+
+    Args:
+        serialized_type: 序列化类型（PICKLE 或 JSON）
+        object_hook: 自定义对象钩子
+        object_pairs_hook: 自定义对象对钩子
+    """
     def __init__(self, serialized_type=SerializedType.PICKLE, object_hook=None, object_pairs_hook=None, **kwargs):
         self._serialized_type = serialized_type
         self._object_hook = object_hook
@@ -104,6 +164,7 @@ class SerializedField(LongTextField):
         super().__init__(**kwargs)
 
     def db_value(self, value):
+        """将 Python 对象序列化后存入数据库"""
         if self._serialized_type == SerializedType.PICKLE:
             return serialize_b64(value, to_str=True)
         elif self._serialized_type == SerializedType.JSON:
@@ -114,6 +175,7 @@ class SerializedField(LongTextField):
             raise ValueError(f"the serialized type {self._serialized_type} is not supported")
 
     def python_value(self, value):
+        """从数据库读取序列化数据并反序列化为 Python 对象"""
         if self._serialized_type == SerializedType.PICKLE:
             return deserialize_b64(value)
         elif self._serialized_type == SerializedType.JSON:
@@ -125,6 +187,12 @@ class SerializedField(LongTextField):
 
 
 def is_continuous_field(cls: typing.Type) -> bool:
+    """
+    判断字段类型是否为连续型（可用于范围查询）
+
+    :param cls: 字段类型
+    :return: 是否为连续型字段
+    """
     if cls in CONTINUOUS_FIELD_TYPE:
         return True
     for p in cls.__bases__:
@@ -138,36 +206,81 @@ def is_continuous_field(cls: typing.Type) -> bool:
 
 
 def auto_date_timestamp_field():
+    """获取所有自动时间戳字段名称集合"""
     return {f"{f}_time" for f in AUTO_DATE_TIMESTAMP_FIELD_PREFIX}
 
 
 def auto_date_timestamp_db_field():
+    """获取所有自动时间戳数据库字段名称集合（带 f_ 前缀）"""
     return {f"f_{f}_time" for f in AUTO_DATE_TIMESTAMP_FIELD_PREFIX}
 
 
 def remove_field_name_prefix(field_name):
+    """
+    移除字段名的前缀（f_）
+
+    :param field_name: 字段名
+    :return: 移除前缀后的字段名
+    """
     return field_name[2:] if field_name.startswith("f_") else field_name
 
 
 class BaseModel(Model):
+    """
+    基础模型类
+
+    所有数据库模型的基类，提供通用的数据库操作方法和字段。
+
+    Attributes:
+        create_time: 创建时间（毫秒时间戳）
+        create_date: 创建日期
+        update_time: 更新时间（毫秒时间戳）
+        update_date: 更新日期
+    """
     create_time = BigIntegerField(null=True, index=True)
     create_date = DateTimeField(null=True, index=True)
     update_time = BigIntegerField(null=True, index=True)
     update_date = DateTimeField(null=True, index=True)
 
     def to_json(self):
-        # This function is obsolete
+        """
+        将模型转换为 JSON 格式（已过时）
+
+        .. deprecated::
+            使用 to_dict() 方法代替
+
+        :return: 模型数据的字典表示
+        """
         return self.to_dict()
 
     def to_dict(self):
+        """
+        将模型转换为字典
+
+        返回模型内部的数据字典，包含所有字段的当前值。
+
+        :return: 模型数据的字典表示，键为字段名，值为字段值
+        """
         return self.__dict__["__data__"]
 
     def to_human_model_dict(self, only_primary_with: list = None):
+        """
+        将模型转换为人类可读的字典格式（移除字段前缀）
+
+        此方法用于将模型数据转换为适合返回给前端的格式，会自动移除数据库字段前缀（如 f_）。
+
+        :param only_primary_with: 可选，指定除主键外需要包含的字段列表。
+                                  如果为 None，则返回所有字段；
+                                  如果指定，则只返回主键和指定字段
+        :return: 人类可读的模型字典，字段名已移除前缀
+        """
         model_dict = self.__dict__["__data__"]
 
         if not only_primary_with:
+            # 返回所有字段，移除前缀
             return {remove_field_name_prefix(k): v for k, v in model_dict.items()}
 
+        # 只返回主键和指定字段
         human_model_dict = {}
         for k in self._meta.primary_key.field_names:
             human_model_dict[remove_field_name_prefix(k)] = model_dict[k]
@@ -177,45 +290,83 @@ class BaseModel(Model):
 
     @property
     def meta(self) -> Metadata:
+        """
+        获取模型的元数据对象
+
+        :return: Peewee 模型的元数据对象，包含表结构、字段等信息
+        """
         return self._meta
 
     @classmethod
     def get_primary_keys_name(cls):
+        """
+        获取主键字段名称列表
+
+        :return: 主键字段名称列表。对于复合主键返回所有字段名，单一主键返回字段名列表
+        """
         return cls._meta.primary_key.field_names if isinstance(cls._meta.primary_key, CompositeKey) else [cls._meta.primary_key.name]
 
     @classmethod
     def getter_by(cls, attr):
+        """
+        获取指定属性的访问器
+
+        :param attr: 属性名称
+        :return: 属性的 getter 函数
+        """
         return operator.attrgetter(attr)(cls)
 
     @classmethod
     def query(cls, reverse=None, order_by=None, **kwargs):
+        """
+        查询数据库记录的通用方法
+
+        支持多种查询条件：
+        - 精确匹配：field=value
+        - 范围查询（连续字段）：field=[start, end]
+        - IN 查询：field=[value1, value2, ...]
+        - 排序：支持正序和倒序
+
+        :param reverse: 排序方向，True=倒序，False=正序，None=不排序
+        :param order_by: 排序字段名，默认为 create_time
+        :param kwargs: 查询条件键值对
+        :return: 匹配的模型对象列表
+        """
         filters = []
         for f_n, f_v in kwargs.items():
             attr_name = "%s" % f_n
+            # 跳过不存在的字段和空值
             if not hasattr(cls, attr_name) or f_v is None:
                 continue
             if type(f_v) in {list, set}:
                 f_v = list(f_v)
+                # 连续字段（整数、浮点数、日期时间）支持范围查询
                 if is_continuous_field(type(getattr(cls, attr_name))):
                     if len(f_v) == 2:
+                        # 处理日期字符串转换
                         for i, v in enumerate(f_v):
                             if isinstance(v, str) and f_n in auto_date_timestamp_field():
                                 # time type: %Y-%m-%d %H:%M:%S
                                 f_v[i] = date_string_to_timestamp(v)
                         lt_value = f_v[0]
                         gt_value = f_v[1]
+                        # 范围查询：BETWEEN
                         if lt_value is not None and gt_value is not None:
                             filters.append(cls.getter_by(attr_name).between(lt_value, gt_value))
+                        # 单边查询：>= 或 <=
                         elif lt_value is not None:
                             filters.append(operator.attrgetter(attr_name)(cls) >= lt_value)
                         elif gt_value is not None:
                             filters.append(operator.attrgetter(attr_name)(cls) <= gt_value)
                 else:
+                    # 非连续字段使用 IN 查询
                     filters.append(operator.attrgetter(attr_name)(cls) << f_v)
             else:
+                # 精确匹配
                 filters.append(operator.attrgetter(attr_name)(cls) == f_v)
         if filters:
             query_records = cls.select().where(*filters)
+            # 应用排序
             if reverse is not None:
                 if not order_by or not hasattr(cls, f"{order_by}"):
                     order_by = "create_time"
@@ -229,6 +380,14 @@ class BaseModel(Model):
 
     @classmethod
     def insert(cls, __data=None, **insert):
+        """
+        插入新记录，自动设置创建时间
+
+        :param __data: 字典形式的数据
+        :param insert: 关键字参数形式的数据
+        :return: 新创建的记录 ID
+        """
+        # 自动设置创建时间戳
         if isinstance(__data, dict) and __data:
             __data[cls._meta.combined["create_time"]] = current_timestamp()
         if insert:
@@ -239,12 +398,25 @@ class BaseModel(Model):
     # update and insert will call this method
     @classmethod
     def _normalize_data(cls, data, kwargs):
+        """
+        标准化数据，自动设置更新时间和日期字段
+
+        此方法在插入和更新时自动调用，用于：
+        1. 自动设置 update_time 为当前时间戳
+        2. 根据 *_time 字段自动设置对应的 *_date 字段
+
+        :param data: 原始数据字典
+        :param kwargs: 额外的关键字参数
+        :return: 标准化后的数据字典
+        """
         normalized = super()._normalize_data(data, kwargs)
         if not normalized:
             return {}
 
+        # 自动设置更新时间
         normalized[cls._meta.combined["update_time"]] = current_timestamp()
 
+        # 自动根据时间戳设置对应的日期字段
         for f_n in AUTO_DATE_TIMESTAMP_FIELD_PREFIX:
             if {f"{f_n}_time", f"{f_n}_date"}.issubset(cls._meta.combined.keys()) and cls._meta.combined[f"{f_n}_time"] in normalized and normalized[cls._meta.combined[f"{f_n}_time"]] is not None:
                 normalized[cls._meta.combined[f"{f_n}_date"]] = timestamp_to_date(normalized[cls._meta.combined[f"{f_n}_time"]])
@@ -253,17 +425,45 @@ class BaseModel(Model):
 
 
 class JsonSerializedField(SerializedField):
+    """
+    JSON 序列化字段
+
+    使用 JSON 格式进行序列化的字段类型，继承自 SerializedField。
+    自动处理自定义对象的序列化和反序列化。
+
+    :param object_hook: 自定义对象钩子函数，用于反序列化时重建对象
+    :param object_pairs_hook: 自定义对象对钩子函数
+    :param kwargs: 其他字段参数
+    """
     def __init__(self, object_hook=utils.from_dict_hook, object_pairs_hook=None, **kwargs):
         super(JsonSerializedField, self).__init__(serialized_type=SerializedType.JSON, object_hook=object_hook, object_pairs_hook=object_pairs_hook, **kwargs)
 
 
 class RetryingPooledMySQLDatabase(PooledMySQLDatabase):
+    """
+    带重试机制的 MySQL 连接池数据库
+
+    在 PooledMySQLDatabase 基础上添加了自动重试机制，
+    用于处理数据库连接中断等问题。
+
+    Attributes:
+        max_retries: 最大重试次数，默认 5 次
+        retry_delay: 初始重试延迟（秒），默认 1 秒，后续按指数增长
+    """
     def __init__(self, *args, **kwargs):
         self.max_retries = kwargs.pop("max_retries", 5)
         self.retry_delay = kwargs.pop("retry_delay", 1)
         super().__init__(*args, **kwargs)
 
     def execute_sql(self, sql, params=None, commit=True):
+        """
+        执行 SQL 语句，支持连接失败自动重试
+
+        :param sql: SQL 语句
+        :param params: SQL 参数
+        :param commit: 是否提交事务
+        :return: 查询结果游标
+        """
         for attempt in range(self.max_retries + 1):
             try:
                 return super().execute_sql(sql, params, commit)
@@ -288,6 +488,9 @@ class RetryingPooledMySQLDatabase(PooledMySQLDatabase):
         return None
 
     def _handle_connection_loss(self):
+        """
+        处理连接丢失，尝试重新连接
+        """
         # self.close_all()
         # self.connect()
         try:
@@ -306,6 +509,11 @@ class RetryingPooledMySQLDatabase(PooledMySQLDatabase):
                 raise
 
     def begin(self):
+        """
+        开始事务，支持连接失败自动重试
+
+        :return: 事务上下文
+        """
         for attempt in range(self.max_retries + 1):
             try:
                 return super().begin()
@@ -331,12 +539,30 @@ class RetryingPooledMySQLDatabase(PooledMySQLDatabase):
 
 
 class RetryingPooledPostgresqlDatabase(PooledPostgresqlDatabase):
+    """
+    带重试机制的 PostgreSQL 连接池数据库
+
+    在 PooledPostgresqlDatabase 基础上添加了自动重试机制，
+    用于处理数据库连接中断等问题。
+
+    Attributes:
+        max_retries: 最大重试次数，默认 5 次
+        retry_delay: 初始重试延迟（秒），默认 1 秒，后续按指数增长
+    """
     def __init__(self, *args, **kwargs):
         self.max_retries = kwargs.pop("max_retries", 5)
         self.retry_delay = kwargs.pop("retry_delay", 1)
         super().__init__(*args, **kwargs)
 
     def execute_sql(self, sql, params=None, commit=True):
+        """
+        执行 SQL 语句，支持连接失败自动重试
+
+        :param sql: SQL 语句
+        :param params: SQL 参数
+        :param commit: 是否提交事务
+        :return: 查询结果游标
+        """
         for attempt in range(self.max_retries + 1):
             try:
                 return super().execute_sql(sql, params, commit)
@@ -365,6 +591,9 @@ class RetryingPooledPostgresqlDatabase(PooledPostgresqlDatabase):
         return None
 
     def _handle_connection_loss(self):
+        """
+        处理连接丢失，尝试重新连接
+        """
         try:
             self.close()
         except Exception:
@@ -381,6 +610,11 @@ class RetryingPooledPostgresqlDatabase(PooledPostgresqlDatabase):
                 raise
 
     def begin(self):
+        """
+        开始事务，支持连接失败自动重试
+
+        :return: 事务上下文
+        """
         for attempt in range(self.max_retries + 1):
             try:
                 return super().begin()
@@ -402,10 +636,15 @@ class RetryingPooledPostgresqlDatabase(PooledPostgresqlDatabase):
 
 
 class RetryingPooledOceanBaseDatabase(PooledMySQLDatabase):
-    """Pooled OceanBase database with retry mechanism.
+    """
+    带重试机制的 OceanBase 连接池数据库
 
-    OceanBase is compatible with MySQL protocol, so we inherit from PooledMySQLDatabase.
-    This class provides connection pooling and automatic retry for connection issues.
+    OceanBase 兼容 MySQL 协议，因此继承自 PooledMySQLDatabase。
+    提供连接池和连接失败自动重试功能。
+
+    Attributes:
+        max_retries: 最大重试次数，默认 5 次
+        retry_delay: 初始重试延迟（秒），默认 1 秒，后续按指数增长
     """
     def __init__(self, *args, **kwargs):
         self.max_retries = kwargs.pop("max_retries", 5)
@@ -413,6 +652,14 @@ class RetryingPooledOceanBaseDatabase(PooledMySQLDatabase):
         super().__init__(*args, **kwargs)
 
     def execute_sql(self, sql, params=None, commit=True):
+        """
+        执行 SQL 语句，支持连接失败自动重试
+
+        :param sql: SQL 语句
+        :param params: SQL 参数
+        :param commit: 是否提交事务
+        :return: 查询结果游标
+        """
         for attempt in range(self.max_retries + 1):
             try:
                 return super().execute_sql(sql, params, commit)
@@ -441,6 +688,9 @@ class RetryingPooledOceanBaseDatabase(PooledMySQLDatabase):
         return None
 
     def _handle_connection_loss(self):
+        """
+        处理连接丢失，尝试重新连接
+        """
         try:
             self.close()
         except Exception:
@@ -457,6 +707,11 @@ class RetryingPooledOceanBaseDatabase(PooledMySQLDatabase):
                 raise
 
     def begin(self):
+        """
+        开始事务，支持连接失败自动重试
+
+        :return: 事务上下文
+        """
         for attempt in range(self.max_retries + 1):
             try:
                 return super().begin()
@@ -482,12 +737,22 @@ class RetryingPooledOceanBaseDatabase(PooledMySQLDatabase):
 
 
 class PooledDatabase(Enum):
+    """
+    数据库连接池类型枚举
+
+    将数据库类型字符串映射到对应的带重试机制的连接池类。
+    """
     MYSQL = RetryingPooledMySQLDatabase
     OCEANBASE = RetryingPooledOceanBaseDatabase
     POSTGRES = RetryingPooledPostgresqlDatabase
 
 
 class DatabaseMigrator(Enum):
+    """
+    数据库迁移器类型枚举
+
+    将数据库类型字符串映射到对应的数据库迁移器类。
+    """
     MYSQL = MySQLMigrator
     OCEANBASE = MySQLMigrator
     POSTGRES = PostgresqlMigrator
@@ -495,15 +760,24 @@ class DatabaseMigrator(Enum):
 
 @singleton
 class BaseDataBase:
+    """
+    基础数据库单例类
+
+    使用单例模式管理数据库连接，确保整个应用只有一个数据库连接实例。
+    根据配置自动选择对应的数据库类型（MySQL、PostgreSQL 或 OceanBase）。
+    """
     def __init__(self):
+        # 从配置中获取数据库参数
         database_config = settings.DATABASE.copy()
         db_name = database_config.pop("name")
 
+        # 配置连接池参数
         pool_config = {
-            'max_retries': 5,
-            'retry_delay': 1,
+            'max_retries': 5,    # 最大重试次数
+            'retry_delay': 1,    # 重试延迟（秒）
         }
         database_config.update(pool_config)
+        # 根据数据库类型创建对应的连接池
         self.database_connection = PooledDatabase[settings.DATABASE_TYPE.upper()].value(
             db_name, **database_config
         )
@@ -512,14 +786,15 @@ class BaseDataBase:
 
 
 def with_retry(max_retries=3, retry_delay=1.0):
-    """Decorator: Add retry mechanism to database operations
+    """
+    装饰器：为数据库操作添加重试机制
 
     Args:
-        max_retries (int): maximum number of retries
-        retry_delay (float): initial retry delay (seconds), will increase exponentially
+        max_retries (int): 最大重试次数，默认 3 次
+        retry_delay (float): 初始重试延迟（秒），默认 1 秒，后续按指数增长
 
     Returns:
-        decorated function
+        装饰后的函数
     """
 
     def decorator(func):
@@ -553,6 +828,18 @@ def with_retry(max_retries=3, retry_delay=1.0):
 
 
 class PostgresDatabaseLock:
+    """
+    PostgreSQL 数据库锁
+
+    使用 PostgreSQL 的 advisory lock 功能实现分布式锁。
+    支持上下文管理器和装饰器两种使用方式。
+
+    Attributes:
+        lock_name: 锁名称
+        lock_id: 通过 MD5 哈希计算的锁 ID
+        timeout: 超时时间（秒）
+        db: 数据库连接
+    """
     def __init__(self, lock_name, timeout=10, db=None):
         self.lock_name = lock_name
         self.lock_id = int(hashlib.md5(lock_name.encode()).hexdigest(), 16) % (2**31 - 1)
@@ -561,6 +848,12 @@ class PostgresDatabaseLock:
 
     @with_retry(max_retries=3, retry_delay=1.0)
     def lock(self):
+        """
+        获取锁
+
+        :return: 成功返回 True
+        :raises Exception: 获取锁超时或失败
+        """
         cursor = self.db.execute_sql("SELECT pg_try_advisory_lock(%s)", (self.lock_id,))
         ret = cursor.fetchone()
         if ret[0] == 0:
@@ -572,6 +865,12 @@ class PostgresDatabaseLock:
 
     @with_retry(max_retries=3, retry_delay=1.0)
     def unlock(self):
+        """
+        释放锁
+
+        :return: 成功返回 True
+        :raises Exception: 释放锁失败
+        """
         cursor = self.db.execute_sql("SELECT pg_advisory_unlock(%s)", (self.lock_id,))
         ret = cursor.fetchone()
         if ret[0] == 0:
@@ -582,15 +881,23 @@ class PostgresDatabaseLock:
             raise Exception(f"postgres lock {self.lock_name} does not exist")
 
     def __enter__(self):
+        """上下文管理器入口，获取锁"""
         if isinstance(self.db, PooledPostgresqlDatabase):
             self.lock()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器出口，释放锁"""
         if isinstance(self.db, PooledPostgresqlDatabase):
             self.unlock()
 
     def __call__(self, func):
+        """
+        装饰器模式，在函数执行期间持有锁
+
+        :param func: 要装饰的函数
+        :return: 装饰后的函数
+        """
         @wraps(func)
         def magic(*args, **kwargs):
             with self:
@@ -600,6 +907,17 @@ class PostgresDatabaseLock:
 
 
 class MysqlDatabaseLock:
+    """
+    MySQL 数据库锁
+
+    使用 MySQL 的 GET_LOCK/RELEASE_LOCK 函数实现分布式锁。
+    支持上下文管理器和装饰器两种使用方式。
+
+    Attributes:
+        lock_name: 锁名称
+        timeout: 超时时间（秒）
+        db: 数据库连接
+    """
     def __init__(self, lock_name, timeout=10, db=None):
         self.lock_name = lock_name
         self.timeout = int(timeout)
@@ -607,6 +925,12 @@ class MysqlDatabaseLock:
 
     @with_retry(max_retries=3, retry_delay=1.0)
     def lock(self):
+        """
+        获取锁
+
+        :return: 成功返回 True
+        :raises Exception: 获取锁超时或失败
+        """
         # SQL parameters only support %s format placeholders
         cursor = self.db.execute_sql("SELECT GET_LOCK(%s, %s)", (self.lock_name, self.timeout))
         ret = cursor.fetchone()
@@ -619,6 +943,12 @@ class MysqlDatabaseLock:
 
     @with_retry(max_retries=3, retry_delay=1.0)
     def unlock(self):
+        """
+        释放锁
+
+        :return: 成功返回 True
+        :raises Exception: 释放锁失败
+        """
         cursor = self.db.execute_sql("SELECT RELEASE_LOCK(%s)", (self.lock_name,))
         ret = cursor.fetchone()
         if ret[0] == 0:
@@ -629,15 +959,23 @@ class MysqlDatabaseLock:
             raise Exception(f"mysql lock {self.lock_name} does not exist")
 
     def __enter__(self):
+        """上下文管理器入口，获取锁"""
         if isinstance(self.db, PooledMySQLDatabase):
             self.lock()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器出口，释放锁"""
         if isinstance(self.db, PooledMySQLDatabase):
             self.unlock()
 
     def __call__(self, func):
+        """
+        装饰器模式，在函数执行期间持有锁
+
+        :param func: 要装饰的函数
+        :return: 装饰后的函数
+        """
         @wraps(func)
         def magic(*args, **kwargs):
             with self:
@@ -647,16 +985,28 @@ class MysqlDatabaseLock:
 
 
 class DatabaseLock(Enum):
+    """
+    数据库锁类型枚举
+
+    将数据库类型字符串映射到对应的数据库锁实现类。
+    """
     MYSQL = MysqlDatabaseLock
     OCEANBASE = MysqlDatabaseLock
     POSTGRES = PostgresDatabaseLock
 
 
+# 创建全局数据库连接实例
 DB = BaseDataBase().database_connection
+# 为数据库连接添加锁功能
 DB.lock = DatabaseLock[settings.DATABASE_TYPE.upper()].value
 
 
 def close_connection():
+    """
+    关闭过期的数据库连接
+
+    清理超过指定时间未使用的数据库连接，释放资源。
+    """
     try:
         if DB:
             DB.close_stale(age=30)
@@ -665,6 +1015,11 @@ def close_connection():
 
 
 class DataBaseModel(BaseModel):
+    """
+    数据库模型基类
+
+    所有数据库表的模型基类，设置数据库连接为全局 DB 实例。
+    """
     class Meta:
         database = DB
 
@@ -672,10 +1027,21 @@ class DataBaseModel(BaseModel):
 @DB.connection_context()
 @DB.lock("init_database_tables", 60)
 def init_database_tables(alter_fields=[]):
+    """
+    初始化数据库表
+
+    扫描模块中所有继承自 DataBaseModel 的类，自动创建对应的数据库表。
+    使用分布式锁确保在多进程/多线程环境下只执行一次。
+
+    :param alter_fields: 需要修改的字段列表（预留参数）
+    :raises Exception: 表创建失败时抛出异常
+    """
+    # 获取模块中所有的类
     members = inspect.getmembers(sys.modules[__name__], inspect.isclass)
     table_objs = []
     create_failed_list = []
     for name, obj in members:
+        # 筛选出数据库模型类（排除基类本身）
         if obj != DataBaseModel and issubclass(obj, DataBaseModel):
             table_objs.append(obj)
 
@@ -693,10 +1059,21 @@ def init_database_tables(alter_fields=[]):
     if create_failed_list:
         logging.error(f"create tables failed: {create_failed_list}")
         raise Exception(f"create tables failed: {create_failed_list}")
+    # 执行数据库迁移
     migrate_db()
 
 
 def fill_db_model_object(model_object, human_model_dict):
+    """
+    用字典数据填充数据库模型对象
+
+    将人类可读格式的字典数据填充到数据库模型对象中。
+    只设置模型中存在的字段。
+
+    :param model_object: 数据库模型对象
+    :param human_model_dict: 包含字段值的字典
+    :return: 填充后的模型对象
+    """
     for k, v in human_model_dict.items():
         attr_name = "%s" % k
         if hasattr(model_object.__class__, attr_name):
@@ -705,6 +1082,29 @@ def fill_db_model_object(model_object, human_model_dict):
 
 
 class User(DataBaseModel, AuthUser):
+    """
+    用户模型
+
+    存储系统用户信息，包括认证信息、个人偏好设置等。
+
+    Attributes:
+        id: 用户唯一标识
+        access_token: 访问令牌
+        nickname: 用户昵称
+        password: 密码（加密存储）
+        email: 邮箱地址（唯一）
+        avatar: 头像（Base64 编码）
+        language: 语言偏好（English/Chinese）
+        color_schema: 颜色主题（Bright/Dark）
+        timezone: 时区设置
+        last_login_time: 最后登录时间
+        is_authenticated: 是否已认证
+        is_active: 是否激活
+        is_anonymous: 是否匿名用户
+        login_channel: 登录渠道
+        status: 状态（0=无效，1=有效）
+        is_superuser: 是否超级用户
+    """
     id = CharField(max_length=32, primary_key=True)
     access_token = CharField(max_length=255, null=True, index=True)
     nickname = CharField(max_length=100, null=False, help_text="nicky name", index=True)
@@ -723,9 +1123,17 @@ class User(DataBaseModel, AuthUser):
     is_superuser = BooleanField(null=True, help_text="is root", default=False, index=True)
 
     def __str__(self):
+        """返回用户的邮箱地址作为字符串表示"""
         return self.email
 
     def get_id(self):
+        """
+        获取用户 ID 的 JWT 令牌表示
+
+        使用 itsdangerous 库将 access_token 序列化为带时间戳的 JWT 令牌。
+
+        :return: JWT 令牌字符串
+        """
         jwt = Serializer(secret_key=settings.SECRET_KEY)
         return jwt.dumps(str(self.access_token))
 
@@ -734,6 +1142,31 @@ class User(DataBaseModel, AuthUser):
 
 
 class Tenant(DataBaseModel):
+    """
+    租户模型
+
+    多租户系统的租户信息，每个租户可以有自己的配置和资源配额。
+
+    Attributes:
+        id: 租户唯一标识
+        name: 租户名称
+        public_key: 公钥
+        llm_id: 默认 LLM 模型 ID
+        tenant_llm_id: 租户 LLM 配置 ID
+        embd_id: 默认嵌入模型 ID
+        tenant_embd_id: 租户嵌入模型配置 ID
+        asr_id: 默认 ASR 模型 ID
+        tenant_asr_id: 租户 ASR 模型配置 ID
+        img2txt_id: 默认图像转文本模型 ID
+        tenant_img2txt_id: 租户图像转文本模型配置 ID
+        rerank_id: 默认重排序模型 ID
+        tenant_rerank_id: 租户重排序模型配置 ID
+        tts_id: 默认 TTS 模型 ID
+        tenant_tts_id: 租户 TTS 模型配置 ID
+        parser_ids: 文档解析器列表
+        credit: 租户配额
+        status: 状态（0=无效，1=有效）
+    """
     id = CharField(max_length=32, primary_key=True)
     name = CharField(max_length=100, null=True, help_text="Tenant name", index=True)
     public_key = CharField(max_length=255, null=True, index=True)
@@ -758,6 +1191,19 @@ class Tenant(DataBaseModel):
 
 
 class UserTenant(DataBaseModel):
+    """
+    用户-租户关联模型
+
+    多对多关系表，记录用户与租户的关联关系及用户角色。
+
+    Attributes:
+        id: 关联记录唯一标识
+        user_id: 用户 ID
+        tenant_id: 租户 ID
+        role: 用户角色（UserTenantRole）
+        invited_by: 邀请人 ID
+        status: 状态（0=无效，1=有效）
+    """
     id = CharField(max_length=32, primary_key=True)
     user_id = CharField(max_length=32, null=False, index=True)
     tenant_id = CharField(max_length=32, null=False, index=True)
@@ -770,6 +1216,19 @@ class UserTenant(DataBaseModel):
 
 
 class InvitationCode(DataBaseModel):
+    """
+    邀请码模型
+
+    用于管理用户加入租户的邀请码。
+
+    Attributes:
+        id: 邀请码唯一标识
+        code: 邀请码
+        visit_time: 访问时间
+        user_id: 使用邀请码的用户 ID
+        tenant_id: 目标租户 ID
+        status: 状态（0=无效，1=有效）
+    """
     id = CharField(max_length=32, primary_key=True)
     code = CharField(max_length=32, null=False, index=True)
     visit_time = DateTimeField(null=True, index=True)
@@ -782,6 +1241,18 @@ class InvitationCode(DataBaseModel):
 
 
 class LLMFactories(DataBaseModel):
+    """
+    LLM 厂商模型
+
+    存储支持的大语言模型厂商信息。
+
+    Attributes:
+        name: 厂商名称（主键）
+        logo: 厂商 Logo（Base64 编码）
+        tags: 标签（LLM, Text Embedding, Image2Text, ASR）
+        rank: 排序权重
+        status: 状态（0=无效，1=有效）
+    """
     name = CharField(max_length=128, null=False, help_text="LLM factory name", primary_key=True)
     logo = TextField(null=True, help_text="llm logo base64")
     tags = CharField(max_length=255, null=False, help_text="LLM, Text Embedding, Image2Text, ASR", index=True)
@@ -789,6 +1260,7 @@ class LLMFactories(DataBaseModel):
     status = CharField(max_length=1, null=True, help_text="is it validate(0: wasted, 1: validate)", default="1", index=True)
 
     def __str__(self):
+        """返回厂商名称"""
         return self.name
 
     class Meta:
@@ -796,6 +1268,20 @@ class LLMFactories(DataBaseModel):
 
 
 class LLM(DataBaseModel):
+    """
+    大语言模型模型
+
+    存储系统支持的各类 AI 模型信息。
+
+    Attributes:
+        llm_name: 模型名称
+        model_type: 模型类型（LLM, Text Embedding, Image2Text, ASR）
+        fid: 厂商 ID
+        max_tokens: 最大 token 数
+        tags: 标签
+        is_tools: 是否支持工具调用
+        status: 状态（0=无效，1=有效）
+    """
     # LLMs dictionary
     llm_name = CharField(max_length=128, null=False, help_text="LLM name", index=True)
     model_type = CharField(max_length=128, null=False, help_text="LLM, Text Embedding, Image2Text, ASR", index=True)
@@ -807,14 +1293,33 @@ class LLM(DataBaseModel):
     status = CharField(max_length=1, null=True, help_text="is it validate(0: wasted, 1: validate)", default="1", index=True)
 
     def __str__(self):
+        """返回模型名称"""
         return self.llm_name
 
     class Meta:
+        # 复合主键：厂商 + 模型名称
         primary_key = CompositeKey("fid", "llm_name")
         db_table = "llm"
 
 
 class TenantLLM(DataBaseModel):
+    """
+    租户 LLM 配置模型
+
+    存储租户自定义的 LLM 配置，包括 API 密钥等。
+
+    Attributes:
+        id: 配置记录 ID（主键）
+        tenant_id: 租户 ID
+        llm_factory: LLM 厂商名称
+        model_type: 模型类型
+        llm_name: 模型名称
+        api_key: API 密钥
+        api_base: API 基础 URL
+        max_tokens: 最大上下文 token 数
+        used_tokens: 已使用 token 数
+        status: 状态（0=无效，1=有效）
+    """
     id = PrimaryKeyField()
     tenant_id = CharField(max_length=32, null=False, index=True)
     llm_factory = CharField(max_length=128, null=False, help_text="LLM factory name", index=True)
@@ -827,10 +1332,12 @@ class TenantLLM(DataBaseModel):
     status = CharField(max_length=1, null=False, help_text="is it validate(0: wasted, 1: validate)", default="1", index=True)
 
     def __str__(self):
+        """返回模型名称"""
         return self.llm_name
 
     class Meta:
         db_table = "tenant_llm"
+        # 唯一索引：租户 + 厂商 + 模型名称
         indexes = (
             (("tenant_id", "llm_factory", "llm_name"), True),
         )

@@ -14,6 +14,15 @@
 #  limitations under the License.
 #
 
+"""
+OceanBase 连接模块
+
+实现消息存储的 OceanBase 后端，提供：
+- 消息的 CRUD 操作
+- 全文搜索和向量搜索
+- SQL 查询构建与执行
+"""
+
 import re
 from typing import Optional
 
@@ -33,6 +42,7 @@ from rag.nlp import is_english
 from rag.nlp.rag_tokenizer import tokenize, fine_grained_tokenize
 
 # Column definitions for memory message table
+# 消息表的列定义
 COLUMN_DEFINITIONS: list[Column] = [
     Column("id", String(256), primary_key=True, comment="unique record id"),
     Column("message_id", String(256), nullable=False, index=True, comment="message id"),
@@ -54,6 +64,7 @@ COLUMN_DEFINITIONS: list[Column] = [
 COLUMN_NAMES: list[str] = [col.name for col in COLUMN_DEFINITIONS]
 
 # Index columns for creating indexes
+# 索引列，用于创建索引
 INDEX_COLUMNS: list[str] = [
     "message_id",
     "memory_id",
@@ -61,6 +72,7 @@ INDEX_COLUMNS: list[str] = [
 ]
 
 # Full-text search columns
+# 全文搜索列
 FTS_COLUMNS: list[str] = [
     "content_ltks",
     "tokenized_content_ltks",
@@ -74,12 +86,19 @@ class SearchResult(BaseModel):
 
 @singleton
 class OBConnection(OBConnectionBase):
+    """
+    OceanBase 连接类
+
+    实现消息存储的 OceanBase 后端接口。
+    """
+
     def __init__(self):
         super().__init__(logger_name='ragflow.memory_ob_conn')
         self._fulltext_search_columns = FTS_COLUMNS
 
     """
     Template method implementations
+    模板方法实现
     """
 
     def get_index_columns(self) -> list[str]:
@@ -117,11 +136,18 @@ class OBConnection(OBConnectionBase):
 
     """
     Field conversion methods
+    字段转换方法
     """
 
     @staticmethod
     def convert_field_name(field_name: str, use_tokenized_content=False) -> str:
-        """Convert message field name to database column name."""
+        """
+        将消息字段名转换为数据库列名
+
+        :param field_name: 消息字段名
+        :param use_tokenized_content: 是否使用分词后的内容字段
+        :return: 数据库列名
+        """
         match field_name:
             case "message_type":
                 return "message_type_kwd"
@@ -136,7 +162,12 @@ class OBConnection(OBConnectionBase):
 
     @staticmethod
     def map_message_to_ob_fields(message: dict) -> dict:
-        """Map message dictionary fields to OceanBase document fields."""
+        """
+        将消息字典字段映射为 OceanBase 文档字段
+
+        :param message: 消息字典
+        :return: OceanBase 文档字典
+        """
         storage_doc = {
             "id": message.get("id"),
             "message_id": message["message_id"],
@@ -162,7 +193,12 @@ class OBConnection(OBConnectionBase):
 
     @staticmethod
     def get_message_from_ob_doc(doc: dict) -> dict:
-        """Convert an OceanBase document back to a message dictionary."""
+        """
+        将 OceanBase 文档转换回消息字典
+
+        :param doc: OceanBase 文档
+        :return: 消息字典
+        """
         embd_field_name = next((key for key in doc.keys() if re.match(r"q_\d+_vec", key)), None)
         content_embed = doc.get(embd_field_name, []) if embd_field_name else []
         if isinstance(content_embed, np.ndarray):
@@ -189,6 +225,7 @@ class OBConnection(OBConnectionBase):
 
     """
     CRUD operations
+    CRUD 操作
     """
 
     def search(
@@ -206,7 +243,23 @@ class OBConnection(OBConnectionBase):
         rank_feature: dict | None = None,
         hide_forgotten: bool = True
     ):
-        """Search messages in memory storage."""
+        """
+        搜索消息存储
+
+        :param select_fields: 要选择的字段
+        :param highlight_fields: 要高亮的字段
+        :param condition: 查询条件
+        :param match_expressions: 匹配表达式列表
+        :param order_by: 排序表达式
+        :param offset: 偏移量
+        :param limit: 限制数量
+        :param index_names: 索引名称
+        :param memory_ids: 内存 ID 列表
+        :param agg_fields: 聚合字段
+        :param rank_feature: 排序特征
+        :param hide_forgotten: 是否隐藏已遗忘的消息
+        :return: (搜索结果, 总数)
+        """
         if isinstance(index_names, str):
             index_names = index_names.split(",")
         assert isinstance(index_names, list) and len(index_names) > 0
@@ -406,7 +459,15 @@ class OBConnection(OBConnectionBase):
         return result, result.total
 
     def get_forgotten_messages(self, select_fields: list[str], index_name: str, memory_id: str, limit: int = 512):
-        """Get forgotten messages (messages with forget_at set)."""
+        """
+        获取已遗忘的消息（设置了 forget_at 的消息）
+
+        :param select_fields: 要选择的字段
+        :param index_name: 索引名称
+        :param memory_id: 内存 ID
+        :param limit: 限制数量
+        :return: 搜索结果
+        """
         if not self._check_table_exists_cached(index_name):
             return None
 
@@ -433,7 +494,16 @@ class OBConnection(OBConnectionBase):
 
     def get_missing_field_message(self, select_fields: list[str], index_name: str, memory_id: str, field_name: str,
                                   limit: int = 512):
-        """Get messages missing a specific field."""
+        """
+        获取缺少指定字段的消息
+
+        :param select_fields: 要选择的字段
+        :param index_name: 索引名称
+        :param memory_id: 内存 ID
+        :param field_name: 字段名
+        :param limit: 限制数量
+        :return: 搜索结果
+        """
         if not self._check_table_exists_cached(index_name):
             return None
 
@@ -460,14 +530,28 @@ class OBConnection(OBConnectionBase):
         return result
 
     def get(self, doc_id: str, index_name: str, memory_ids: list[str]) -> dict | None:
-        """Get single message by id."""
+        """
+        根据 ID 获取单条消息
+
+        :param doc_id: 文档 ID
+        :param index_name: 索引名称
+        :param memory_ids: 内存 ID 列表
+        :return: 消息字典
+        """
         doc = super().get(doc_id, index_name, memory_ids)
         if doc is None:
             return None
         return self.get_message_from_ob_doc(doc)
 
     def insert(self, documents: list[dict], index_name: str, memory_id: str = None) -> list[str]:
-        """Insert messages into memory storage."""
+        """
+        插入消息到存储
+
+        :param documents: 文档列表
+        :param index_name: 索引名称
+        :param memory_id: 内存 ID
+        :return: 错误列表
+        """
         if not documents:
             return []
 
@@ -505,7 +589,15 @@ class OBConnection(OBConnectionBase):
         return res
 
     def update(self, condition: dict, new_value: dict, index_name: str, memory_id: str) -> bool:
-        """Update messages with given condition."""
+        """
+        根据条件更新消息
+
+        :param condition: 更新条件
+        :param new_value: 新值
+        :param index_name: 索引名称
+        :param memory_id: 内存 ID
+        :return: 是否成功
+        """
         if not self._check_table_exists_cached(index_name):
             return True
 
@@ -546,15 +638,29 @@ class OBConnection(OBConnectionBase):
         return False
 
     def delete(self, condition: dict, index_name: str, memory_id: str) -> int:
-        """Delete messages with given condition."""
+        """
+        根据条件删除消息
+
+        :param condition: 删除条件
+        :param index_name: 索引名称
+        :param memory_id: 内存 ID
+        :return: 删除数量
+        """
         condition_dict = {self.convert_field_name(k): v for k, v in condition.items()}
         return super().delete(condition_dict, index_name, memory_id)
 
     """
     Helper functions for search result
+    搜索结果辅助函数
     """
 
     def get_total(self, res) -> int:
+        """
+        获取搜索结果总数
+
+        :param res: 搜索结果
+        :return: 总数
+        """
         if isinstance(res, tuple):
             return res[1]
         if hasattr(res, 'total'):
@@ -562,6 +668,12 @@ class OBConnection(OBConnectionBase):
         return 0
 
     def get_doc_ids(self, res) -> list[str]:
+        """
+        获取搜索结果的文档 ID 列表
+
+        :param res: 搜索结果
+        :return: 文档 ID 列表
+        """
         if isinstance(res, tuple):
             res = res[0]
         if hasattr(res, 'messages'):
@@ -569,7 +681,13 @@ class OBConnection(OBConnectionBase):
         return []
 
     def get_fields(self, res, fields: list[str]) -> dict[str, dict]:
-        """Get fields from search result."""
+        """
+        从搜索结果中获取指定字段
+
+        :param res: 搜索结果
+        :param fields: 字段列表
+        :return: {文档ID: 字段值字典} 的映射
+        """
         if isinstance(res, tuple):
             res = res[0]
 
@@ -606,7 +724,14 @@ class OBConnection(OBConnectionBase):
         return res_fields
 
     def get_highlight(self, res, keywords: list[str], field_name: str):
-        """Get highlighted text for search results."""
+        """
+        获取搜索结果的高亮文本
+
+        :param res: 搜索结果
+        :param keywords: 关键词列表
+        :param field_name: 字段名
+        :return: {文档ID: 高亮文本} 的映射
+        """
         if isinstance(res, tuple):
             res = res[0]
         messages = getattr(res, "messages", None)
@@ -615,7 +740,13 @@ class OBConnection(OBConnectionBase):
         )
 
     def get_aggregation(self, res, field_name: str):
-        """Get aggregation for search results."""
+        """
+        获取搜索结果的聚合统计
+
+        :param res: 搜索结果
+        :param field_name: 聚合字段名
+        :return: [(字段值, 计数), ...] 列表
+        """
         if isinstance(res, tuple):
             res_obj = res[0]
         else:

@@ -14,6 +14,15 @@
 #  limitations under the License.
 #
 
+"""
+Infinity 连接模块
+
+实现消息存储的 Infinity 后端，提供：
+- 消息的 CRUD 操作
+- 全文搜索和向量搜索
+- DataFrame 与字段转换
+"""
+
 import re
 import json
 import copy
@@ -29,11 +38,17 @@ from common.time_utils import date_string_to_timestamp
 
 @singleton
 class InfinityConnection(InfinityConnectionBase):
+    """
+    Infinity 连接类
+
+    实现消息存储的 Infinity 后端接口。
+    """
+
     def __init__(self):
         super().__init__(mapping_file_name="message_infinity_mapping.json", table_name_prefix="memory_")
 
     """
-    Dataframe and fields convert
+    DataFrame and fields convert
     """
 
     @staticmethod

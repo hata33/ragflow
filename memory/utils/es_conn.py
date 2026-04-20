@@ -14,6 +14,15 @@
 #  limitations under the License.
 #
 
+"""
+Elasticsearch 连接模块
+
+实现消息存储的 Elasticsearch 后端，提供：
+- 消息的 CRUD 操作
+- 全文搜索和向量搜索
+- 字段名映射与转换
+"""
+
 import re
 import json
 import time
@@ -34,6 +43,11 @@ ATTEMPT_TIME = 2
 
 @singleton
 class ESConnection(ESConnectionBase):
+    """
+    Elasticsearch 连接类
+
+    实现消息存储的 Elasticsearch 后端接口。
+    """
 
     @staticmethod
     def convert_field_name(field_name: str, use_tokenized_content=False) -> str:
