@@ -1,6 +1,6 @@
 # 上传文件接口 - `/document/upload` 调用栈分析
 
-> **文件位置**: `api/apps/document_app.py:66`
+> **文件位置**: [`../../api/apps/document_app.py:66`](../../api/apps/document_app.py)
 > **路由**: `POST /api/v1/document/upload`
 > **功能**: 上传文件到指定知识库
 
@@ -33,7 +33,7 @@ Quart 路由分发器处理请求
 ### 2️⃣ **装饰器层 (从下到上执行)**
 
 #### `@validate_request("kb_id")` - 参数验证
-**位置**: `api/utils/api_utils.py:153`
+**位置**: [`../../api/utils/api_utils.py:153`](../../api/utils/api_utils.py)
 
 ```python
 def validate_request(*args, **kwargs):
@@ -58,7 +58,7 @@ await request.form  # 获取表单数据
 ```
 
 #### `@login_required` - 身份认证
-**位置**: `api/apps/__init__.py:167`
+**位置**: [`../../api/apps/__init__.py:167`](../../api/apps/__init__.py)
 
 ```python
 def login_required(func):
@@ -124,7 +124,7 @@ async def upload():
     )  # → 6️⃣
 
     if err:
-        return get_json_result(data=files, message="\n".join(err))
+        return get_json_result(data=files, message="/n".join(err))
     if not files:
         return get_json_result(data=files, message="File format issue")
 
@@ -134,7 +134,7 @@ async def upload():
 
 ### 4️⃣ **KnowledgebaseService.get_by_id()**
 
-**位置**: `api/db/services/knowledgebase_service.py`
+**位置**: [`../../api/db/services/knowledgebase_service.py`](../../api/db/services/knowledgebase_service.py)
 
 ```python
 @classmethod
@@ -154,7 +154,7 @@ def get_by_id(cls, kb_id):
 
 ### 5️⃣ **check_kb_team_permission()**
 
-**位置**: `api/common/check_team_permission.py`
+**位置**: [`../../api/common/check_team_permission.py`](../../api/common/check_team_permission.py)
 
 ```python
 def check_kb_team_permission(kb, user_id):
@@ -176,7 +176,7 @@ def check_kb_team_permission(kb, user_id):
 
 ### 6️⃣ **FileService.upload_document()** - 核心逻辑
 
-**位置**: `api/db/services/file_service.py:432-518`
+**位置**: [`../../api/db/services/file_service.py:432-518`](../../api/db/services/file_service.py)
 
 这是整个上传流程的核心方法，处理文件存储和数据库记录。
 
@@ -316,7 +316,7 @@ def upload_document(self, kb, file_objs, user_id, src="local", parent_path=None)
 ## 7️⃣-21️⃣ 关键子方法详解
 
 ### 7️⃣ get_root_folder()
-**位置**: `file_service.py:225`
+**位置**: [`../../file_service.py:225`](../../file_service.py)
 
 ```python
 @classmethod
@@ -350,7 +350,7 @@ def get_root_folder(cls, tenant_id):
 ```
 
 ### 8️⃣ init_knowledgebase_docs()
-**位置**: `file_service.py:295`
+**位置**: [`../../file_service.py:295`](../../file_service.py)
 
 ```python
 @classmethod
@@ -379,7 +379,7 @@ def init_knowledgebase_docs(cls, root_id, tenant_id):
 ```
 
 ### 9️⃣ get_kb_folder()
-**位置**: `file_service.py:250`
+**位置**: [`../../file_service.py:250`](../../file_service.py)
 
 ```python
 @classmethod
@@ -407,7 +407,7 @@ def get_kb_folder(cls, tenant_id):
 ```
 
 ### 10️⃣ new_a_file_from_kb()
-**位置**: `file_service.py:266`
+**位置**: [`../../file_service.py:266`](../../file_service.py)
 
 ```python
 @classmethod
@@ -439,7 +439,7 @@ def new_a_file_from_kb(cls, tenant_id, name, parent_id, ty=FileType.FOLDER.value
 ```
 
 ### 11️⃣ DocumentService.get_by_id()
-**位置**: `api/db/services/document_service.py`
+**位置**: [`../../api/db/services/document_service.py`](../../api/db/services/document_service.py)
 
 ```python
 @classmethod
@@ -461,7 +461,7 @@ def get_by_id(cls, doc_id):
 ```
 
 ### 12️⃣ STORAGE_IMPL.put()
-**位置**: `common/storage/` (根据配置实现)
+**位置**: [`../../common/storage/`](../../common/storage/) (根据配置实现)
 
 ```python
 def put(self, bucket, key, blob, tenant_id=None):
@@ -484,7 +484,7 @@ def put(self, bucket, key, blob, tenant_id=None):
 ```
 
 ### 13️⃣ DocumentService.update_by_id()
-**位置**: `api/db/services/document_service.py`
+**位置**: [`../../api/db/services/document_service.py`](../../api/db/services/document_service.py)
 
 ```python
 @classmethod
@@ -508,7 +508,7 @@ def update_by_id(cls, doc_id, data):
 ```
 
 ### 14️⃣ check_doc_health()
-**位置**: `api/db/services/document_service.py`
+**位置**: [`../../api/db/services/document_service.py`](../../api/db/services/document_service.py)
 
 ```python
 @staticmethod
@@ -552,7 +552,7 @@ def obj_exist(self, bucket, key):
 ```
 
 ### 16️⃣ read_potential_broken_pdf()
-**位置**: `api/utils/file_utils.py`
+**位置**: [`../../api/utils/file_utils.py`](../../api/utils/file_utils.py)
 
 ```python
 def read_potential_broken_pdf(blob):
@@ -591,7 +591,7 @@ def read_potential_broken_pdf(blob):
 同 12️⃣
 
 ### 18️⃣ thumbnail_img()
-**位置**: `api/utils/file_utils.py`
+**位置**: [`../../api/utils/file_utils.py`](../../api/utils/file_utils.py)
 
 ```python
 def thumbnail_img(filename, blob):
@@ -638,7 +638,7 @@ def thumbnail_img(filename, blob):
 ```
 
 ### 19️⃣ get_parser()
-**位置**: `file_service.py:561`
+**位置**: [`../../file_service.py:561`](../../file_service.py)
 
 ```python
 @staticmethod
@@ -665,15 +665,15 @@ def get_parser(doc_type, filename, default):
         return ParserType.PICTURE.value
     if doc_type == FileType.AURAL:
         return ParserType.AUDIO.value
-    if re.search(r"\.(ppt|pptx|pages)$", filename):
+    if re.search(r"/.(ppt|pptx|pages)$", filename):
         return ParserType.PRESENTATION.value
-    if re.search(r"\.(msg|eml)$", filename):
+    if re.search(r"/.(msg|eml)$", filename):
         return ParserType.EMAIL.value
     return default
 ```
 
 ### 20️⃣ DocumentService.insert()
-**位置**: `api/db/services/document_service.py`
+**位置**: [`../../api/db/services/document_service.py`](../../api/db/services/document_service.py)
 
 ```python
 @classmethod
@@ -697,7 +697,7 @@ def insert(cls, doc):
 ```
 
 ### 21️⃣ add_file_from_kb()
-**位置**: `file_service.py:404`
+**位置**: [`../../file_service.py:404`](../../file_service.py)
 
 ```python
 @classmethod
@@ -940,13 +940,13 @@ def add_file_from_kb(cls, doc, kb_folder_id, tenant_id):
 
 | 文件 | 说明 |
 |-----|------|
-| `api/apps/document_app.py` | 路由定义和处理入口 |
-| `api/db/services/file_service.py` | 文件服务核心逻辑 |
-| `api/db/services/document_service.py` | 文档数据库操作 |
-| `api/db/services/knowledgebase_service.py` | 知识库服务 |
-| `api/common/check_team_permission.py` | 权限检查 |
-| `api/utils/file_utils.py` | 文件工具函数 |
-| `common/storage/` | 存储抽象层实现 |
+| [[`../../api/apps/document_app.py`](../../api/apps/document_app.py)](../../api/apps/document_app.py) | 路由定义和处理入口 |
+| [[`../../api/db/services/file_service.py`](../../api/db/services/file_service.py)](../../api/db/services/file_service.py) | 文件服务核心逻辑 |
+| [[`../../api/db/services/document_service.py`](../../api/db/services/document_service.py)](../../api/db/services/document_service.py) | 文档数据库操作 |
+| [[`../../api/db/services/knowledgebase_service.py`](../../api/db/services/knowledgebase_service.py)](../../api/db/services/knowledgebase_service.py) | 知识库服务 |
+| [[`../../api/common/check_team_permission.py`](../../api/common/check_team_permission.py)](../../api/common/check_team_permission.py) | 权限检查 |
+| [[`../../api/utils/file_utils.py`](../../api/utils/file_utils.py)](../../api/utils/file_utils.py) | 文件工具函数 |
+| [`common/storage/`](../../common/storage/) | 存储抽象层实现 |
 
 ---
 

@@ -5,13 +5,13 @@
 本文档深入分析 RAGFlow 文档解析核心链路中的文本分块逻辑，聚焦于 `chunker.chunk()` 方法如何将原始文档转换为可供向量检索的文本块。
 
 **核心文件位置**：
-- 主入口：`D:\Project\ragflow\rag\app\naive.py:794-1175`
-- 分块算法：`D:\Project\ragflow\rag\nlp\__init__.py:1070-1127`
-- 分词包装：`D:\Project\ragflow\rag\nlp\__init__.py:302-327`
+- 主入口：[`../../rag/app/naive.py:794-1175`](../../rag/app/naive.py:794-1175)
+- 分块算法：[`../../rag/nlp/__init__.py:1070-1127`](../../rag/nlp/__init__.py:1070-1127)
+- 分词包装：[`../../rag/nlp/__init__.py:302-327`](../../rag/nlp/__init__.py:302-327)
 
 **调用位置**：
 ```
-D:\Project\ragflow\rag\svr\task_executor.py:461
+D:/Project/ragflow/rag/svr/task_executor.py:461
 cks = await thread_pool_exec(chunker.chunk, ...)
 ```
 
@@ -34,7 +34,7 @@ cks = await thread_pool_exec(chunker.chunk, ...)
 
 ## 1️⃣ 入口函数：chunk()
 
-**文件位置**：`D:\Project\ragflow\rag\app\naive.py:794`
+**文件位置**：[`../../rag/app/naive.py:794`](../../rag/app/naive.py)
 
 ### 函数签名
 ```python
@@ -58,7 +58,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000,
 
 #### 步骤1：初始化解析器
 ```python
-# D:\Project\ragflow\rag\app\naive.py:805
+# D:/Project/ragflow/rag/app/naive.py:805
 chunker = get_chunker(
     kwargs.get("parser_config", {}),
     kwargs.get("tenant_id", DEFAULT_ID),
@@ -68,7 +68,7 @@ chunker = get_chunker(
 
 #### 步骤2：根据文件类型选择解析路径
 ```python
-# D:\Project\ragflow\rag\app\naive.py:817-900
+# D:/Project/ragflow/rag/app/naive.py:817-900
 if filename.endswith(".docx"):
     sections, tables = parse_docx(binary, from_page, to_page)
     
@@ -96,7 +96,7 @@ else:
 
 #### 步骤3：文本分块（核心算法）
 ```python
-# D:\Project\ragflow\rag\app\naive.py:905
+# D:/Project/ragflow/rag/app/naive.py:905
 if not sections:
     return []
 
@@ -110,12 +110,12 @@ chunks = naive_merge(
 
 **参数说明**：
 - `chunk_token_num=512`：单个文本块的token上限（默认值）
-- `delimiter="\n。；！？"`：分段分隔符（中英文标点）
+- `delimiter="/n。；！？"`：分段分隔符（中英文标点）
 - `overlapped_percent=0`：重叠百分比（用于保留上下文）
 
 #### 步骤4：分词包装
 ```python
-# D:\Project\ragflow\rag\app\naive.py:912-928
+# D:/Project/ragflow/rag/app/naive.py:912-928
 res = []
 doc = {
     "docnm_kwd": filename,
@@ -136,14 +136,14 @@ return res
 
 ## 2️⃣ 核心算法：naive_merge()
 
-**文件位置**：`D:\Project\ragflow\rag\nlp\__init__.py:1070`
+**文件位置**：[`../../rag/nlp/__init__.py:1070`](../../rag/nlp/__init__.py)
 
 这是整个分块逻辑的核心，负责将长文本按token限制智能切分。
 
 ### 函数签名
 ```python
 def naive_merge(sections: str | list, chunk_token_num=128, 
-                delimiter="\n。；！？", overlapped_percent=0):
+                delimiter="/n。；！？", overlapped_percent=0):
 ```
 
 ### 算法流程图
@@ -176,7 +176,7 @@ def naive_merge(sections: str | list, chunk_token_num=128,
 
 #### 步骤1：处理输入和初始化
 ```python
-# D:\Project\ragflow\rag\nlp\__init__.py:1078-1084
+# D:/Project/ragflow/rag/nlp/__init__.py:1078-1084
 if isinstance(sections, str):
     sections = [sections]
 
@@ -186,22 +186,22 @@ pat = re.compile(r"([{}])".format(re.escape(delimiter)))
 
 #### 步骤2：分段切分
 ```python
-# D:\Project\ragflow\rag\nlp\__init__.py:1087-1095
-sections = [pat.sub(r"\1\0", s).split("\0") for s in sections]
-# 结果: [["句1", "句2", "\n"], ["句3", "句4", "。"], ...]
+# D:/Project/ragflow/rag/nlp/__init__.py:1087-1095
+sections = [pat.sub(r"/1/0", s).split("/0") for s in sections]
+# 结果: [["句1", "句2", "/n"], ["句3", "句4", "。"], ...]
 
 # 展平为一级列表
 sections = [s for sec in sections for s in sec if s]
-# 结果: ["句1", "句2", "\n", "句3", "句4", "。", ...]
+# 结果: ["句1", "句2", "/n", "句3", "句4", "。", ...]
 ```
 
 **关键点**：
-- 分隔符（如 `\n`、`。`）本身会被保留为独立元素
+- 分隔符（如 `/n`、`。`）本身会被保留为独立元素
 - 这确保了文本块的边界是完整的句子
 
 #### 步骤3：智能合并
 ```python
-# D:\Project\ragflow\rag\nlp\__init__.py:1098-1118
+# D:/Project/ragflow/rag/nlp/__init__.py:1098-1118
 chunks = []
 chunk = ""
 overlap = ""
@@ -223,7 +223,7 @@ if chunk:
 
 **重叠计算逻辑**：
 ```python
-# D:\Project\ragflow\rag\nlp\__init__.py:1106
+# D:/Project/ragflow/rag/nlp/__init__.py:1106
 if overlapped_percent > 0:
     tokens = chunk.split()
     overlap_len = int(len(tokens) * overlapped_percent)
@@ -242,7 +242,7 @@ Chunk 2: "...文本的末尾20%作为上下文" + "新内容" (128 tokens)
 
 #### 步骤4：返回结果
 ```python
-# D:\Project\ragflow\rag\nlp\__init__.py:1120-1127
+# D:/Project/ragflow/rag/nlp/__init__.py:1120-1127
 return chunks
 ```
 
@@ -250,7 +250,7 @@ return chunks
 
 ## 3️⃣ 分词包装：tokenize_chunks()
 
-**文件位置**：`D:\Project\ragflow\rag\nlp\__init__.py:302`
+**文件位置**：[`../../rag/nlp/__init__.py:302`](../../rag/nlp/__init__.py)
 
 ### 函数签名
 ```python
@@ -287,7 +287,7 @@ def tokenize_chunks(chunks, doc, eng=False, pdf_parser=None,
 
 #### 步骤1：遍历文本块
 ```python
-# D:\Project\ragflow\rag\nlp\__init__.py:309-327
+# D:/Project/ragflow/rag/nlp/__init__.py:309-327
 res = []
 for ii, ck in enumerate(chunks):
     d = copy.deepcopy(doc)
@@ -298,7 +298,7 @@ return res
 
 #### 步骤2：分词处理
 ```python
-# D:\Project\ragflow\rag\nlp\__init__.py:313
+# D:/Project/ragflow/rag/nlp/__init__.py:313
 def tokenize(doc, text, eng):
     doc["content_with_weight"] = text
     
@@ -380,16 +380,16 @@ def tokenize(doc, text, eng):
   - 英文文档：256-512
   - 代码文档：128-256
 
-### delimiter（默认"\n。；！？")
+### delimiter（默认"/n。；！？")
 - **作用**：定义句子边界
 - **影响**：
   - 过于宽松（如","）：切分过细，语义不完整
-  - 过于严格（如"\n\n"）：块过大，可能超出token限制
+  - 过于严格（如"/n/n"）：块过大，可能超出token限制
 - **推荐配置**：
   ```python
-  中文: "\n。；！？"
-  英文: "\n.!?"
-  混合: "\n。；！？.!?"
+  中文: "/n。；！？"
+  英文: "/n.!?"
+  混合: "/n。；！？.!?"
   ```
 
 ### overlapped_percent（默认0）

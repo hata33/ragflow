@@ -1,6 +1,6 @@
 # do_handle_task() 标准文档解析流程详解
 
-> **文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1187`
+> **文件位置**: [`../../rag/svr/task_executor.py:1187`](../../rag/svr/task_executor.py)
 > **核心功能**: 处理单个文档解析任务，执行分块、向量化、入库等核心流程
 
 ---
@@ -35,7 +35,7 @@ do_handle_task(task)
 
 ## 1️⃣ 入口与路由判断
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1187-1214`
+**文件位置**: [`../../rag/svr/task_executor.py:1187-1214`](../../rag/svr/task_executor.py:1187-1214)
 
 ```python
 @timeout(60 * 60 * 3, 1)  # 3小时超时保护
@@ -69,7 +69,7 @@ async def do_handle_task(task):
 
 ## 2️⃣ 提取任务参数
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1227-1250`
+**文件位置**: [`../../rag/svr/task_executor.py:1227-1250`](../../rag/svr/task_executor.py:1227-1250)
 
 ```python
     # ========== 提取任务关键参数 ==========
@@ -121,7 +121,7 @@ progress_callback = partial(set_progress, task_id, task_from_page, task_to_page)
 
 ## 3️⃣ 检查任务取消状态
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1250-1253`
+**文件位置**: [`../../rag/svr/task_executor.py:1250-1253`](../../rag/svr/task_executor.py:1250-1253)
 
 ```python
     # ========== 检查任务是否已取消 ==========
@@ -136,7 +136,7 @@ progress_callback = partial(set_progress, task_id, task_from_page, task_to_page)
 - 如果键存在，说明任务被取消，直接返回
 - 取消标志由 `/document/run` 接口的 `run: "2"` 参数设置
 
-**相关文件**: `D:\Project\ragflow\api\db\services\task_service.py:517`
+**相关文件**: [`../../api/db/services/task_service.py:517`](../../api/db/services/task_service.py)
 
 ```python
 def has_canceled(task_id):
@@ -154,7 +154,7 @@ def has_canceled(task_id):
 
 ## 4️⃣ 绑定嵌入模型
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1256-1269`
+**文件位置**: [`../../rag/svr/task_executor.py:1256-1269`](../../rag/svr/task_executor.py:1256-1269)
 
 ```python
     # ========== 步骤1: 绑定嵌入模型 ==========
@@ -208,21 +208,21 @@ def has_canceled(task_id):
    - 如果失败，设置进度为 -1（错误状态）
 
 **相关文件**:
-- `D:\Project\ragflow\api\db\joint_services\tenant_model_service.py` - 模型配置获取
-- `D:\Project\ragflow\rag\llm\embeddings.py` - 嵌入模型实现
+- [`../../api/db/joint_services/tenant_model_service.py`](../../api/db/joint_services/tenant_model_service.py) - 模型配置获取
+- [`../../rag/llm/embeddings.py`](../../rag/llm/embeddings.py) - 嵌入模型实现
 
 ---
 
 ## 5️⃣ 初始化知识库索引
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1272`
+**文件位置**: [`../../rag/svr/task_executor.py:1272`](../../rag/svr/task_executor.py)
 
 ```python
     # ========== 步骤2: 初始化知识库的搜索索引 ==========
     init_kb(task, vector_size)
 ```
 
-**函数详情**: `D:\Project\ragflow\rag\svr\task_executor.py`
+**函数详情**: [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py)
 
 ```python
 def init_kb(task, vector_size):
@@ -262,7 +262,7 @@ def init_kb(task, vector_size):
 
 ## 6️⃣ DataFlow 任务路由
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1274-1277`
+**文件位置**: [`../../rag/svr/task_executor.py:1274-1277`](../../rag/svr/task_executor.py:1274-1277)
 
 ```python
     # ========== 路由A: DataFlow 任务 ==========
@@ -277,7 +277,7 @@ def init_kb(task, vector_size):
 
 ## 7️⃣ 标准文档解析流程
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1389-1437`
+**文件位置**: [`../../rag/svr/task_executor.py:1389-1437`](../../rag/svr/task_executor.py:1389-1437)
 
 这是本文档的核心部分，详细描述标准文档解析的完整流程。
 
@@ -295,7 +295,7 @@ def init_kb(task, vector_size):
 
 ### 7.2 构建文档 Chunks
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1393-1398`
+**文件位置**: [`../../rag/svr/task_executor.py:1393-1398`](../../rag/svr/task_executor.py:1393-1398)
 
 ```python
         # ========== 步骤3: 调用 build_chunks 进行文档分块 ==========
@@ -316,7 +316,7 @@ def init_kb(task, vector_size):
 
 ### 7.3 生成向量嵌入
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1399-1414`
+**文件位置**: [`../../rag/svr/task_executor.py:1399-1414`](../../rag/svr/task_executor.py:1399-1414)
 
 ```python
         # ========== 步骤4: 对 chunks 进行向量嵌入 ==========
@@ -348,11 +348,11 @@ def init_kb(task, vector_size):
 
 ### 7.4 可选：生成 TOC（目录）
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1415-1417`
+**文件位置**: [`../../rag/svr/task_executor.py:1415-1417`](../../rag/svr/task_executor.py:1415-1417)
 
 ```python
         # ========== 步骤5: 若启用 TOC 提取，在后台线程中异步生成目录 ==========
-        if task["parser_id"].lower() == "naive" \
+        if task["parser_id"].lower() == "naive" /
             and task["parser_config"].get("toc_extraction", False):
             toc_thread = executor.submit(
                 build_TOC,           # TOC 生成函数
@@ -367,7 +367,7 @@ def init_kb(task, vector_size):
 - 在后台线程中异步执行，不阻塞主流程
 - TOC 生成是可选功能
 
-**build_TOC() 函数**: `D:\Project\ragflow\rag\svr\task_executor.py`
+**build_TOC() 函数**: [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py)
 
 ```python
 def build_TOC(task, chunks, callback):
@@ -378,7 +378,7 @@ def build_TOC(task, chunks, callback):
     from rag.prompts.generator import run_toc_from_text
     
     # 合并所有 chunks 的内容
-    full_text = "\n".join([chunk["content_with_weight"] for chunk in chunks])
+    full_text = "/n".join([chunk["content_with_weight"] for chunk in chunks])
     
     # 调用 LLM 生成 TOC
     toc = run_toc_from_text(
@@ -393,7 +393,7 @@ def build_TOC(task, chunks, callback):
 
 ### 7.5 插入 Chunks 到文档存储
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1419-1437`
+**文件位置**: [`../../rag/svr/task_executor.py:1419-1437`](../../rag/svr/task_executor.py:1419-1437)
 
 ```python
         # ========== 统计 chunk 数量 ==========
@@ -454,7 +454,7 @@ def build_TOC(task, chunks, callback):
 
 ## 8️⃣ build_chunks() 详解
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:304-501`
+**文件位置**: [`../../rag/svr/task_executor.py:304-501`](../../rag/svr/task_executor.py:304-501)
 
 ```python
 @timeout(60 * 80, 1)  # 80分钟超时
@@ -539,7 +539,7 @@ build_chunks(task, progress_callback)
 
 ### 8️⃣2️⃣ 步骤1: 检查文件大小
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:324-328`
+**文件位置**: [`../../rag/svr/task_executor.py:324-328`](../../rag/svr/task_executor.py:324-328)
 
 ```python
     # ========== 步骤1: 检查文件大小是否超出系统限制 ==========
@@ -561,14 +561,14 @@ build_chunks(task, progress_callback)
 
 ### 8️⃣3️⃣ 步骤2: 选择解析器
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:331`
+**文件位置**: [`../../rag/svr/task_executor.py:331`](../../rag/svr/task_executor.py)
 
 ```python
     # ========== 步骤2: 根据解析器 ID 从工厂映射表获取对应的解析模块 ==========
     chunker = FACTORY[task["parser_id"].lower()]
 ```
 
-**FACTORY 映射表**: `D:\Project\ragflow\rag\svr\task_executor.py:86-100`
+**FACTORY 映射表**: [`../../rag/svr/task_executor.py:86-100`](../../rag/svr/task_executor.py:86-100)
 
 ```python
 FACTORY = {
@@ -589,13 +589,13 @@ FACTORY = {
 }
 ```
 
-**解析器位置**: `D:\Project\ragflow\rag\app\`
+**解析器位置**: [`../../rag/app/`](../../rag/app/)
 
 ---
 
 ### 8️⃣4️⃣ 步骤3: 从 MinIO 获取文件
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:334-348`
+**文件位置**: [`../../rag/svr/task_executor.py:334-348`](../../rag/svr/task_executor.py:334-348)
 
 ```python
     # ========== 步骤3: 从 MinIO 获取文件二进制数据 ==========
@@ -632,7 +632,7 @@ FACTORY = {
         raise
 ```
 
-**get_storage_binary() 函数**: `D:\Project\ragflow\rag\svr\task_executor.py:298-300`
+**get_storage_binary() 函数**: [`../../rag/svr/task_executor.py:298-300`](../../rag/svr/task_executor.py:298-300)
 
 ```python
 async def get_storage_binary(bucket, name):
@@ -658,7 +658,7 @@ async def get_storage_binary(bucket, name):
 
 ### 8️⃣5️⃣ 步骤4: 在线程池中执行 chunker.chunk
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:350-371`
+**文件位置**: [`../../rag/svr/task_executor.py:350-371`](../../rag/svr/task_executor.py:350-371)
 
 这是整个 `build_chunks` 的**核心步骤**，体现了你提到的关键流程：
 
@@ -714,7 +714,7 @@ async with chunk_limiter:
 - 限制同时进行的文档解析任务数量，防止资源耗尽
 - 文档解析是 CPU 密集型操作，需要控制并发
 
-**定义位置**: `D:\Project\ragflow\rag\svr\task_executor.py`
+**定义位置**: [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py)
 
 ```python
 chunk_limiter = asyncio.Semaphore(settings.CHUNK_CONCURRENCY)  # 默认值通常为 4-8
@@ -737,7 +737,7 @@ cks = await thread_pool_exec(
 2. **避免阻塞事件循环**: 在线程池中执行可以避免阻塞 asyncio 事件循环
 3. **提高并发能力**: 允许同时处理多个文档解析任务
 
-**thread_pool_exec 实现**: `D:\Project\ragflow\common\misc_utils.py`
+**thread_pool_exec 实现**: [`../../common/misc_utils.py`](../../common/misc_utils.py)
 
 ```python
 async def thread_pool_exec(func, *args, **kwargs):
@@ -772,7 +772,7 @@ asyncio.get_event_loop().run_in_executor(None, partial(chunker.chunk, binary, ..
 
 **不同的解析器有不同的实现**:
 
-**naive 解析器** (`D:\Project\ragflow\rag\app\naive.py`):
+**naive 解析器** ([`../../rag/app/naive.py`](../../rag/app/naive.py)):
 ```python
 def chunk(filename, binary, parser_config, from_page, to_page, callback, ...):
     """通用文档分块
@@ -785,7 +785,7 @@ def chunk(filename, binary, parser_config, from_page, to_page, callback, ...):
     # 实现细节...
 ```
 
-**PDF 解析器** (`D:\Project\ragflow\rag\app\pdf.py`):
+**PDF 解析器** ([`../../rag/app/pdf.py`](../../rag/app/pdf.py)):
 ```python
 def chunk(filename, binary, parser_config, from_page, to_page, callback, ...):
     """PDF 文档分块
@@ -798,7 +798,7 @@ def chunk(filename, binary, parser_config, from_page, to_page, callback, ...):
     # 实现细节...
 ```
 
-**table 解析器** (`D:\Project\ragflow\rag\app\table.py`):
+**table 解析器** ([`../../rag/app/table.py`](../../rag/app/table.py)):
 ```python
 def chunk(filename, binary, parser_config, from_page, to_page, callback, ...):
     """表格分块
@@ -831,7 +831,7 @@ cks = [
 
 ### 8️⃣6️⃣ 步骤5: 处理图片 - 并发上传到 MinIO
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:373-427`
+**文件位置**: [`../../rag/svr/task_executor.py:373-427`](../../rag/svr/task_executor.py:373-427)
 
 ```python
     # ========== 步骤5: 构建 chunk 文档对象并上传图片到 MinIO ==========
@@ -922,7 +922,7 @@ cks = [
 
 ### 8️⃣7️⃣ 步骤6: LLM 增强处理（可选）
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:432-501`
+**文件位置**: [`../../rag/svr/task_executor.py:432-501`](../../rag/svr/task_executor.py:432-501)
 
 ```python
     # ========== 步骤6: 可选 - 使用 LLM 自动提取每个 chunk 的关键词 ==========
@@ -1015,7 +1015,7 @@ docs = [
 
 ## 9️⃣ embedding() 详解
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py`
+**文件位置**: [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py)
 
 ```python
 async def embedding(chunks, embedding_model, parser_config, progress_callback):
@@ -1087,7 +1087,7 @@ chunk = {
 
 ## 🔟 insert_chunks() 详解
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py`
+**文件位置**: [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py)
 
 ```python
 async def insert_chunks(task_id, tenant_id, kb_id, chunks, progress_callback):
@@ -1151,7 +1151,7 @@ async def insert_chunks(task_id, tenant_id, kb_id, chunks, progress_callback):
     )
 ```
 
-**docStoreConn 实现**: `D:\Project\ragflow\rag\nlp\search.py`
+**docStoreConn 实现**: [`../../rag/nlp/search.py`](../../rag/nlp/search.py)
 
 ### 10.3 更新进度
 
@@ -1164,7 +1164,7 @@ async def insert_chunks(task_id, tenant_id, kb_id, chunks, progress_callback):
 
 ## 1️⃣1️⃣ DocumentService.update_chunk_num()
 
-**文件位置**: `D:\Project\ragflow\api\db\services\document_service.py`
+**文件位置**: [`../../api/db/services/document_service.py`](../../api/db/services/document_service.py)
 
 ```python
 @classmethod
@@ -1342,7 +1342,7 @@ task = {
     "parser_id": "naive",              # 解析器类型
     "parser_config": {                 # 解析器配置
         "chunk_token_num": 512,
-        "delimiter": "\n",
+        "delimiter": "/n",
         "layout_recognize": "DeepDOC",
         "auto_keywords": 1,
         "auto_questions": 0,
@@ -1514,18 +1514,18 @@ await thread_pool_exec(chunker.chunk, binary, ...)
 
 | 文件 | 说明 |
 |-----|------|
-| `D:\Project\ragflow\rag\svr\task_executor.py:1187` | `do_handle_task()` 主函数 |
-| `D:\Project\ragflow\rag\svr\task_executor.py:304` | `build_chunks()` 函数 |
-| `D:\Project\ragflow\rag\svr\task_executor.py:298` | `get_storage_binary()` 函数 |
-| `D:\Project\ragflow\rag\svr\task_executor.py` | `embedding()` 函数 |
-| `D:\Project\ragflow\rag\svr\task_executor.py` | `insert_chunks()` 函数 |
-| `D:\Project\ragflow\rag\svr\task_executor.py` | `build_TOC()` 函数 |
-| `D:\Project\ragflow\rag\app\` | 各种解析器实现 |
-| `D:\Project\ragflow\rag\utils\base64_image.py` | `image2id()` 函数 |
-| `D:\Project\ragflow\rag\prompts\generator.py` | LLM 增强函数 |
-| `D:\Project\ragflow\rag\nlp\search.py` | 文档存储接口 |
-| `D:\Project\ragflow\api\db\services\document_service.py` | `DocumentService` |
-| `D:\Project\ragflow\api\db\services\task_service.py:517` | `has_canceled()` 函数 |
+| [`../../rag/svr/task_executor.py:1187`](../../rag/svr/task_executor.py) | `do_handle_task()` 主函数 |
+| [`../../rag/svr/task_executor.py:304`](../../rag/svr/task_executor.py) | `build_chunks()` 函数 |
+| [`../../rag/svr/task_executor.py:298`](../../rag/svr/task_executor.py) | `get_storage_binary()` 函数 |
+| [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py) | `embedding()` 函数 |
+| [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py) | `insert_chunks()` 函数 |
+| [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py) | `build_TOC()` 函数 |
+| [`../../rag/app/`](../../rag/app/) | 各种解析器实现 |
+| [`../../rag/utils/base64_image.py`](../../rag/utils/base64_image.py) | `image2id()` 函数 |
+| [`../../rag/prompts/generator.py`](../../rag/prompts/generator.py) | LLM 增强函数 |
+| [`../../rag/nlp/search.py`](../../rag/nlp/search.py) | 文档存储接口 |
+| [`../../api/db/services/document_service.py`](../../api/db/services/document_service.py) | `DocumentService` |
+| [`../../api/db/services/task_service.py:517`](../../api/db/services/task_service.py) | `has_canceled()` 函数 |
 
 ---
 

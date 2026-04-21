@@ -1,7 +1,7 @@
 # embedding() 向量嵌入与 insert_chunks() 入库详解
 
-> **核心文件**: `D:\Project\ragflow\rag\svr\task_executor.py`
-> **调用锚点**: `task_executor.py:1403` — `do_handle_task()` 中调用 `embedding()`
+> **核心文件**: [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py)
+> **调用锚点**: [`../../task_executor.py:1403`](../../task_executor.py) — `do_handle_task()` 中调用 `embedding()`
 > **上游文档**: [003-do_handle_task-标准文档解析流程.md](./003-do_handle_task-标准文档解析流程.md)
 
 ---
@@ -24,7 +24,7 @@ do_handle_task(task)
 
 ## 方法调用栈清单
 
-以 `task_executor.py:1403` 为锚点，从入口到存储引擎的完整链路：
+以 [`../../task_executor.py:1403`](../../task_executor.py) 为锚点，从入口到存储引擎的完整链路：
 
 ```
 main() :1661
@@ -46,7 +46,7 @@ main() :1661
 
 ## 1️⃣ embedding() 向量嵌入详解
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:704-786`
+**文件位置**: [`../../rag/svr/task_executor.py:704-786`](../../rag/svr/task_executor.py:704-786)
 
 ### 1.1 函数签名与参数
 
@@ -67,7 +67,7 @@ async def embedding(docs, mdl, parser_config=None, callback=None):
 
 ### 1.2 调用点
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1400-1414`
+**文件位置**: [`../../rag/svr/task_executor.py:1400-1414`](../../rag/svr/task_executor.py:1400-1414)
 
 ```python
 start_ts = timer()
@@ -126,7 +126,7 @@ tts, cnts = [], []
 for d in docs:
     tts.append(d.get("docnm_kwd", "Title"))
     # 优先使用问题关键词作为嵌入文本
-    c = "\n".join(d.get("question_kwd", []))
+    c = "/n".join(d.get("question_kwd", []))
     if not c:
         c = d["content_with_weight"]
     # 去除 HTML 表格标签，避免干扰嵌入质量
@@ -223,7 +223,7 @@ cnts = cnts_
 truncate(c, mdl.max_length - 10)
 ```
 - 每条文本截断到 `模型最大长度 - 10`，留 10 token 安全余量
-- 截断函数位于 `common/token_utils.py`
+- 截断函数位于 [`../../common/token_utils.py`](../../common/token_utils.py)
 
 **进度计算**：
 - 嵌入阶段进度范围：`0.7` ~ `0.9`
@@ -412,7 +412,7 @@ embedding(docs, mdl, parser_config, callback)
 
 ## 2️⃣ insert_chunks() 入库详解
 
-**文件位置**: `D:\Project\ragflow\rag\svr\task_executor.py:1096-1183`
+**文件位置**: [`../../rag/svr/task_executor.py:1096-1183`](../../rag/svr/task_executor.py:1096-1183)
 
 ### 2.1 函数签名与参数
 
@@ -687,16 +687,16 @@ elif DOC_ENGINE in ("oceanbase", "ob"):
 
 | 存储引擎 | 环境变量值 | 连接类 | 文件位置 |
 |----------|-----------|--------|----------|
-| Elasticsearch | `elasticsearch`（默认） | `ESConnection` | `rag/utils/es_conn.py:62` |
-| Infinity | `infinity` | `InfinityConnection` | `rag/utils/infinity_conn.py:30` |
-| OpenSearch | `opensearch` | `OSConnection` | `rag/utils/opensearch_conn.py` |
-| OceanBase | `oceanbase` / `ob` | `OBConnection` | `rag/utils/ob_conn.py` |
+| Elasticsearch | `elasticsearch`（默认） | `ESConnection` | [`../../rag/utils/es_conn.py:62`](../../rag/utils/es_conn.py) |
+| Infinity | `infinity` | `InfinityConnection` | [`../../rag/utils/infinity_conn.py:30`](../../rag/utils/infinity_conn.py) |
+| OpenSearch | `opensearch` | `OSConnection` | [`../../rag/utils/opensearch_conn.py`](../../rag/utils/opensearch_conn.py) |
+| OceanBase | `oceanbase` / `ob` | `OBConnection` | [`../../rag/utils/ob_conn.py`](../../rag/utils/ob_conn.py) |
 
 ---
 
 ### 2.6 索引名称生成
 
-**文件位置**: `rag/nlp/search.py:56`
+**文件位置**: [`../../rag/nlp/search.py:56`](../../rag/nlp/search.py)
 
 ```python
 def index_name(uid):
@@ -741,7 +741,7 @@ insert_chunks(task_id, tenant_id, dataset_id, chunks, callback)
 
 ### 3.1 更新文档统计
 
-**文件位置**: `task_executor.py:1446`
+**文件位置**: [`../../task_executor.py:1446`](../../task_executor.py)
 
 ```python
 DocumentService.increment_chunk_num(
@@ -868,20 +868,20 @@ es_doc = {
 
 | 文件 | 行号 | 说明 |
 |-----|------|------|
-| `rag/svr/task_executor.py` | 704-786 | `embedding()` 函数 |
-| `rag/svr/task_executor.py` | 1096-1183 | `insert_chunks()` 函数 |
-| `rag/svr/task_executor.py` | 1403 | `embedding()` 调用锚点 |
-| `rag/svr/task_executor.py` | 1428 | `insert_chunks()` 调用点 |
-| `rag/svr/task_executor.py` | 687-701 | `init_kb()` 索引初始化 |
-| `api/db/services/llm_service.py` | 85-118 | `LLMBundle.encode()` |
-| `api/db/services/tenant_llm_service.py` | 394-401 | `LLM4Tenant.__init__()` |
-| `rag/utils/es_conn.py` | 62 | `ESConnection` 类 |
-| `rag/utils/es_conn.py` | 296-333 | `ESConnection.insert()` |
-| `rag/utils/infinity_conn.py` | 30 | `InfinityConnection` 类 |
-| `rag/nlp/search.py` | 56 | `index_name()` 索引名生成 |
-| `common/misc_utils.py` | 128-133 | `thread_pool_exec()` 线程池执行 |
-| `common/settings.py` | 260-283 | 存储引擎初始化 |
-| `common/token_utils.py` | - | `truncate()` / `num_tokens_from_string()` |
+| [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py) | 704-786 | `embedding()` 函数 |
+| [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py) | 1096-1183 | `insert_chunks()` 函数 |
+| [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py) | 1403 | `embedding()` 调用锚点 |
+| [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py) | 1428 | `insert_chunks()` 调用点 |
+| [`../../rag/svr/task_executor.py`](../../rag/svr/task_executor.py) | 687-701 | `init_kb()` 索引初始化 |
+| [`../../api/db/services/llm_service.py`](../../api/db/services/llm_service.py) | 85-118 | `LLMBundle.encode()` |
+| [`../../api/db/services/tenant_llm_service.py`](../../api/db/services/tenant_llm_service.py) | 394-401 | `LLM4Tenant.__init__()` |
+| [`../../rag/utils/es_conn.py`](../../rag/utils/es_conn.py) | 62 | `ESConnection` 类 |
+| [`../../rag/utils/es_conn.py`](../../rag/utils/es_conn.py) | 296-333 | `ESConnection.insert()` |
+| [`../../rag/utils/infinity_conn.py`](../../rag/utils/infinity_conn.py) | 30 | `InfinityConnection` 类 |
+| [`../../rag/nlp/search.py`](../../rag/nlp/search.py) | 56 | `index_name()` 索引名生成 |
+| [`../../common/misc_utils.py`](../../common/misc_utils.py) | 128-133 | `thread_pool_exec()` 线程池执行 |
+| [`../../common/settings.py`](../../common/settings.py) | 260-283 | 存储引擎初始化 |
+| [`../../common/token_utils.py`](../../common/token_utils.py) | - | `truncate()` / `num_tokens_from_string()` |
 
 ---
 
