@@ -42,50 +42,15 @@ from rag.utils.redis_conn import REDIS_CONN
 
 class Graph:
     """
-        dsl = {
-            "components": {
-                "begin": {
-                    "obj":{
-                        "component_name": "Begin",
-                        "params": {},
-                    },
-                    "downstream": ["answer_0"],
-                    "upstream": [],
-                },
-                "retrieval_0": {
-                    "obj": {
-                        "component_name": "Retrieval",
-                        "params": {}
-                    },
-                    "downstream": ["generate_0"],
-                    "upstream": ["answer_0"],
-                },
-                "generate_0": {
-                    "obj": {
-                        "component_name": "Generate",
-                        "params": {}
-                    },
-                    "downstream": ["answer_0"],
-                    "upstream": ["retrieval_0"],
-                }
-            },
-            "history": [],
-            "path": ["begin"],
-            "retrieval": {"chunks": [], "doc_aggs": []},
-            "globals": {
-                "sys.query": "",
-                "sys.user_id": tenant_id,
-                "sys.conversation_turns": 0,
-                "sys.files": []
-            }
-        }
-        """
+    Graph类表示一个组件图结构，用于定义Agent工作流程的DSL（领域特定语言）
+    包含组件定义、上下游关系、历史记录、全局变量等
+    """
 
     def __init__(self, dsl: str, tenant_id=None, task_id=None, custom_header=None):
-        self.path = []
-        self.components = {}
-        self.error = ""
-        # Accept legacy DSL on read, but keep the in-memory canvas in the latest schema.
+        self.path = []  # 执行路径
+        self.components = {}  # 组件字典
+        self.error = ""  # 错误信息
+        # 接受旧版DSL，但在内存画布中保持最新schema
         self.dsl = normalize_chunker_dsl(json.loads(dsl))
         self._tenant_id = tenant_id
         self.task_id = task_id if task_id else get_uuid()
@@ -94,11 +59,13 @@ class Graph:
         self.load()
 
     def load(self):
+        """加载DSL定义的组件并初始化它们"""
         self.components = self.dsl["components"]
         cpn_nms = set([])
         for k, cpn in self.components.items():
             cpn_nms.add(cpn["obj"]["component_name"])
             param = component_class(cpn["obj"]["component_name"] + "Param")()
+            # 为组件添加自定义头部信息
             cpn["obj"]["params"]["custom_header"] = self.custom_header
             param.update(cpn["obj"]["params"])
             try:
@@ -106,11 +73,13 @@ class Graph:
             except Exception as e:
                 raise ValueError(self.get_component_name(k) + f": {e}")
 
+            # 实例化组件对象
             cpn["obj"] = component_class(cpn["obj"]["component_name"])(self, k, param)
 
         self.path = self.dsl["path"]
 
     def __str__(self):
+        """将当前状态序列化为JSON字符串"""
         self.dsl["path"] = self.path
         self.dsl["task_id"] = self.task_id
         dsl = {
@@ -132,6 +101,7 @@ class Graph:
         return json.dumps(dsl, ensure_ascii=False)
 
     def reset(self):
+        """重置画布状态"""
         self.path = []
         for k, cpn in self.components.items():
             self.components[k]["obj"].reset()
@@ -142,30 +112,44 @@ class Graph:
             logging.exception(e)
 
     def get_component_name(self, cid):
+        """根据组件ID获取组件名称"""
         for n in self.dsl.get("graph", {}).get("nodes", []):
             if cid == n["id"]:
                 return n["data"]["name"]
         return ""
 
     def run(self, **kwargs):
+        """运行工作流（抽象方法，必须被子类重写）"""
         raise NotImplementedError()
 
     def get_component(self, cpn_id) -> Union[None, dict[str, Any]]:
+        """根据ID获取组件定义"""
         return self.components.get(cpn_id)
 
     def get_component_obj(self, cpn_id) -> ComponentBase:
+        """根据ID获取组件实例对象"""
         return self.components.get(cpn_id)["obj"]
 
     def get_component_type(self, cpn_id) -> str:
+        """获取组件类型名称"""
         return self.components.get(cpn_id)["obj"].component_name
 
     def get_component_input_form(self, cpn_id) -> dict:
+        """获取组件的输入表单定义"""
         return self.components.get(cpn_id)["obj"].get_input_form()
 
     def get_tenant_id(self):
+        """获取租户ID"""
         return self._tenant_id
 
-    def get_value_with_variable(self,value: str) -> Any:
+    def get_value_with_variable(self, value: str) -> Any:
+        """
+        解析字符串中的变量替换为实际值
+        支持三种变量格式：
+        - 组件变量: {component_id@variable_name}
+        - 系统变量: {sys.variable_name}
+        - 环境变量: {env.variable_name}
+        """
         pat = re.compile(r"\{* *\{([a-zA-Z:0-9]+@[A-Za-z0-9_.-]+|sys\.[A-Za-z0-9_.]+|env\.[A-Za-z0-9_.]+)\} *\}*")
         out_parts = []
         last = 0
@@ -193,6 +177,10 @@ class Graph:
         return("".join(out_parts))
 
     def get_variable_value(self, exp: str) -> Any:
+        """
+        获取变量的实际值
+        exp: 变量表达式，格式为 "component_id@variable_name" 或 "sys.variable_name" 或 "env.variable_name"
+        """
         exp = exp.strip("{").strip("}").strip(" ").strip("{").strip("}")
         if exp.find("@") < 0:
             return self.globals[exp]
@@ -207,9 +195,14 @@ class Graph:
 
         if not rest:
             return root_val
-        return self.get_variable_param_value(root_val,rest)
+        return self.get_variable_param_value(root_val, rest)
 
     def get_variable_param_value(self, obj: Any, path: str) -> Any:
+        """
+        从对象中获取嵌套参数值
+        obj: 源对象
+        path: 访问路径，例如 "property.sub_property[0].field"
+        """
         cur = obj
         if not path:
             return cur
@@ -238,7 +231,12 @@ class Graph:
             cur = getattr(cur, key, None)
         return cur
 
-    def set_variable_value(self, exp: str,value):
+    def set_variable_value(self, exp: str, value):
+        """
+        设置变量值
+        exp: 变量表达式
+        value: 要设置的值
+        """
         exp = exp.strip("{").strip("}").strip(" ").strip("{").strip("}")
         if exp.find("@") < 0:
             self.globals[exp] = value
@@ -256,9 +254,15 @@ class Graph:
         root_val = cpn["obj"].output(root_key)
         if not root_val:
             root_val = {}
-        cpn["obj"].set_output(root_key, self.set_variable_param_value(root_val,rest,value))
+        cpn["obj"].set_output(root_key, self.set_variable_param_value(root_val, rest, value))
 
     def set_variable_param_value(self, obj: Any, path: str, value) -> Any:
+        """
+        设置对象中嵌套参数的值
+        obj: 目标对象
+        path: 设置路径
+        value: 要设置的值
+        """
         cur = obj
         keys = path.split('.')
         if not path:
@@ -271,9 +275,11 @@ class Graph:
         return obj
 
     def is_canceled(self) -> bool:
+        """检查任务是否已被取消"""
         return has_canceled(self.task_id)
 
     def cancel_task(self) -> bool:
+        """取消当前任务"""
         try:
             REDIS_CONN.set(f"{self.task_id}-cancel", "x")
         except Exception as e:
@@ -283,8 +289,13 @@ class Graph:
 
 
 class Canvas(Graph):
+    """
+    Canvas类扩展了Graph类，提供了完整的Agent工作流执行能力
+    包含历史记录、全局变量、检索结果等功能
+    """
 
     def __init__(self, dsl: str, tenant_id=None, task_id=None, canvas_id=None, custom_header=None):
+        # 初始化全局变量
         self.globals = {
             "sys.query": "",
             "sys.user_id": tenant_id,
@@ -298,6 +309,7 @@ class Canvas(Graph):
         self._id = canvas_id
 
     def load(self):
+        """加载DSL并初始化Canvas特有的属性"""
         super().load()
         self.history = self.dsl["history"]
         if "globals" in self.dsl:
@@ -324,12 +336,14 @@ class Canvas(Graph):
         self.memory = self.dsl.get("memory", [])
 
     def __str__(self):
+        """序列化Canvas状态"""
         self.dsl["history"] = self.history
         self.dsl["retrieval"] = self.retrieval
         self.dsl["memory"] = self.memory
         return super().__str__()
 
     def reset(self, mem=False):
+        """重置Canvas状态，可以选择是否保留内存"""
         super().reset()
         if not mem:
             self.history = []
@@ -375,18 +389,24 @@ class Canvas(Graph):
                     self.globals[k] = ""
 
     async def run(self, **kwargs):
+        """
+        异步运行工作流
+        kwargs: 包含查询、用户ID、文件等输入参数
+        返回: 生成器，产生事件流
+        """
         self.globals["sys.date"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         st = time.perf_counter()
         self._loop = asyncio.get_running_loop()
         self.message_id = get_uuid()
         created_at = int(time.time())
+        # 添加用户输入到历史记录
         self.add_user_input(kwargs.get("query"))
         for k, cpn in self.components.items():
             self.components[k]["obj"].reset(True)
 
         if kwargs.get("webhook_payload"):
             for k, cpn in self.components.items():
-                if self.components[k]["obj"].component_name.lower() == "begin"  and self.components[k]["obj"]._param.mode == "Webhook":
+                if self.components[k]["obj"].component_name.lower() == "begin" and self.components[k]["obj"]._param.mode == "Webhook":
                     payload = kwargs.get("webhook_payload", {})
                     if "input" in payload:
                         self.components[k]["obj"].set_input_value("request", payload["input"])
@@ -404,10 +424,11 @@ class Canvas(Graph):
         for k in kwargs.keys():
             if k in ["query", "user_id", "files"] and kwargs[k]:
                 if k == "files":
+                    # 异步获取文件
                     self.globals[f"sys.{k}"] = await self.get_files_async(kwargs[k], layout_recognize)
                 else:
                     self.globals[f"sys.{k}"] = kwargs[k]
-        if not self.globals["sys.conversation_turns"] :
+        if not self.globals["sys.conversation_turns"]:
             self.globals["sys.conversation_turns"] = 0
         self.globals["sys.conversation_turns"] += 1
 
@@ -435,6 +456,7 @@ class Canvas(Graph):
         self.retrieval.append({"chunks": {}, "doc_aggs": {}})
 
         async def _run_batch(f, t):
+            """异步批量运行组件"""
             if self.is_canceled():
                 msg = f"Task {self.task_id} has been canceled during batch execution."
                 logging.info(msg)
@@ -484,6 +506,7 @@ class Canvas(Graph):
                 await asyncio.gather(*tasks)
 
         def _node_finished(cpn_obj):
+            """生成节点完成事件"""
             return decorate("node_finished",{
                            "inputs": cpn_obj.get_input_values(),
                            "outputs": cpn_obj.output(),
@@ -511,7 +534,7 @@ class Canvas(Graph):
                 })
             await _run_batch(idx, to)
             to = len(self.path)
-            # post-processing of components invocation
+            # 组件调用后处理
             for i in range(idx, to):
                 cpn = self.get_component(self.path[i])
                 cpn_obj = self.get_component_obj(self.path[i])
@@ -785,70 +808,110 @@ class Canvas(Graph):
         return asyncio.run(self.get_files_async(files, layout_recognize))
 
     def tool_use_callback(self, agent_id: str, func_name: str, params: dict, result: Any, elapsed_time=None):
+        """
+        工具使用回调函数，记录工具调用过程
+        agent_id: 代理ID
+        func_name: 函数名
+        params: 参数
+        result: 结果
+        elapsed_time: 耗时
+        """
         agent_ids = agent_id.split("-->")
         agent_name = self.get_component_name(agent_ids[0])
         path = agent_name if len(agent_ids) < 2 else agent_name+"-->"+"-->".join(agent_ids[1:])
         try:
+            # 获取现有的日志数据
             bin = REDIS_CONN.get(f"{self.task_id}-{self.message_id}-logs")
             if bin:
                 obj = json.loads(bin.encode("utf-8"))
                 if obj[-1]["component_id"] == agent_ids[0]:
+                    # 如果最后一个条目是同一组件，添加到其追踪列表
                     obj[-1]["trace"].append({"path": path, "tool_name": func_name, "arguments": params, "result": result, "elapsed_time": elapsed_time})
                 else:
+                    # 否则创建新的条目
                     obj.append({
                     "component_id": agent_ids[0],
                     "trace": [{"path": path, "tool_name": func_name, "arguments": params, "result": result, "elapsed_time": elapsed_time}]
                 })
             else:
+                # 如果没有现有日志，创建新的日志数组
                 obj = [{
                     "component_id": agent_ids[0],
                     "trace": [{"path": path, "tool_name": func_name, "arguments": params, "result": result, "elapsed_time": elapsed_time}]
                 }]
+            # 设置日志数据到Redis，过期时间为10分钟
             REDIS_CONN.set_obj(f"{self.task_id}-{self.message_id}-logs", obj, 60*10)
         except Exception as e:
             logging.exception(e)
 
     def add_reference(self, chunks: list[object], doc_infos: list[object]):
+        """
+        添加引用信息（文档块和文档信息）到检索结果中
+        chunks: 文档块列表
+        doc_infos: 文档信息列表
+        """
         if not self.retrieval:
             self.retrieval = [{"chunks": {}, "doc_aggs": {}}]
 
         r = self.retrieval[-1]
+        # 格式化文档块并添加到检索结果中
         for ck in chunks_format({"chunks": chunks}):
             cid = hash_str2int(ck["id"], 500)
             # cid = uuid.uuid5(uuid.NAMESPACE_DNS, ck["id"])
             if cid not in r:
                 r["chunks"][cid] = ck
 
+        # 添加文档信息到检索结果中
         for doc in doc_infos:
             if doc["doc_name"] not in r:
                 r["doc_aggs"][doc["doc_name"]] = doc
 
     def get_reference(self):
+        """获取引用信息（文档块和文档信息）"""
         if not self.retrieval:
             return {"chunks": {}, "doc_aggs": {}}
         return self.retrieval[-1]
 
     def _has_reference(self) -> bool:
+        """检查是否存在引用信息"""
         ref = self.get_reference()
         if not isinstance(ref, dict):
             return False
         return bool(ref.get("chunks") or ref.get("doc_aggs"))
 
     def _build_message_end(self, cpn_obj) -> dict:
+        """
+        构建消息结束事件的数据
+        cpn_obj: 组件对象
+        """
         message_end = {}
+        # 如果设置了状态参数，添加到消息结束数据中
         if cpn_obj.get_param("status"):
             message_end["status"] = cpn_obj.get_param("status")
+        # 如果有附件输出，添加到消息结束数据中
         if isinstance(cpn_obj.output("attachment"), dict):
             message_end["attachment"] = cpn_obj.output("attachment")
+        # 如果有引用信息，添加到消息结束数据中
         if self._has_reference():
             message_end["reference"] = self.get_reference()
         return message_end
 
     def add_memory(self, user:str, assist:str, summ: str):
+        """
+        添加记忆到记忆存储中
+        user: 用户输入
+        assist: 助手回复
+        summ: 总结
+        """
         self.memory.append((user, assist, summ))
 
     def get_memory(self) -> list[Tuple]:
+        """获取记忆存储中的所有记忆项"""
         return self.memory
 
     def get_component_thoughts(self, cpn_id) -> str:
+        """
+        获取指定组件的思考过程
+        cpn_id: 组件ID
+        """
         return self.components.get(cpn_id)["obj"].thoughts()

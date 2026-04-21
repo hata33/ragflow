@@ -38,32 +38,49 @@ _IS_RAW_CONF = "_is_raw_conf"
 
 
 class ComponentParamBase(ABC):
+    """
+    组件参数基类，定义了组件参数的基本结构和验证方法
+    """
     def __init__(self):
+        # 消息历史窗口大小，默认13
         self.message_history_window_size = 13
+        # 输入参数字典
         self.inputs = {}
+        # 输出参数字典
         self.outputs = {}
+        # 组件描述
         self.description = ""
+        # 最大重试次数
         self.max_retries = 0
+        # 错误后延迟时间
         self.delay_after_error = 2.0
+        # 异常处理方式
         self.exception_method = None
+        # 异常时的默认值
         self.exception_default_value = None
+        # 异常时跳转到的组件
         self.exception_goto = None
+        # 调试输入
         self.debug_inputs = {}
 
     def set_name(self, name: str):
+        """设置组件名称"""
         self._name = name
         return self
 
     def check(self):
+        """参数检查的抽象方法，子类必须实现"""
         raise NotImplementedError("Parameter Object should be checked.")
 
     @classmethod
     def _get_or_init_deprecated_params_set(cls):
+        """获取或初始化废弃参数集合"""
         if not hasattr(cls, _DEPRECATED_PARAMS):
             setattr(cls, _DEPRECATED_PARAMS, set())
         return getattr(cls, _DEPRECATED_PARAMS)
 
     def _get_or_init_feeded_deprecated_params_set(self, conf=None):
+        """获取或初始化已提供废弃参数集合"""
         if not hasattr(self, _FEEDED_DEPRECATED_PARAMS):
             if conf is None:
                 setattr(self, _FEEDED_DEPRECATED_PARAMS, set())
@@ -76,6 +93,7 @@ class ComponentParamBase(ABC):
         return getattr(self, _FEEDED_DEPRECATED_PARAMS)
 
     def _get_or_init_user_feeded_params_set(self, conf=None):
+        """获取或初始化用户提供的参数集合"""
         if not hasattr(self, _USER_FEEDED_PARAMS):
             if conf is None:
                 setattr(self, _USER_FEEDED_PARAMS, set())
@@ -84,19 +102,24 @@ class ComponentParamBase(ABC):
         return getattr(self, _USER_FEEDED_PARAMS)
 
     def get_user_feeded(self):
+        """获取用户提供的参数集合"""
         return self._get_or_init_user_feeded_params_set()
 
     def get_feeded_deprecated_params(self):
+        """获取已提供的废弃参数集合"""
         return self._get_or_init_feeded_deprecated_params_set()
 
     @property
     def _deprecated_params_set(self):
+        """获取废弃参数集合"""
         return {name: True for name in self.get_feeded_deprecated_params()}
 
     def __str__(self):
+        """将参数对象转换为JSON字符串"""
         return json.dumps(self.as_dict(), ensure_ascii=False)
 
     def as_dict(self):
+        """将参数对象转换为字典格式"""
         def _recursive_convert_obj_to_dict(obj):
             ret_dict = {}
             if isinstance(obj, dict):
@@ -110,7 +133,7 @@ class ComponentParamBase(ABC):
             for attr_name in list(obj.__dict__):
                 if attr_name in [_FEEDED_DEPRECATED_PARAMS, _DEPRECATED_PARAMS, _USER_FEEDED_PARAMS, _IS_RAW_CONF]:
                     continue
-                # get attr
+                # 获取属性
                 attr = getattr(obj, attr_name)
                 if isinstance(attr, pd.DataFrame):
                     ret_dict[attr_name] = attr.to_dict()
@@ -125,6 +148,7 @@ class ComponentParamBase(ABC):
         return _recursive_convert_obj_to_dict(self)
 
     def update(self, conf, allow_redundant=False):
+        """更新参数配置"""
         update_from_raw_conf = conf.get(_IS_RAW_CONF, True)
         if update_from_raw_conf:
             deprecated_params_set = self._get_or_init_deprecated_params_set()
@@ -146,7 +170,7 @@ class ComponentParamBase(ABC):
             inst_variables = param.__dict__
             redundant_attrs = []
             for config_key, config_value in config.items():
-                # redundant attr
+                # 冗余属性
                 if config_key not in inst_variables:
                     if not update_from_raw_conf and config_key.startswith("_"):
                         setattr(param, config_key, config_value)
@@ -158,20 +182,20 @@ class ComponentParamBase(ABC):
                 full_config_key = f"{prefix}{config_key}"
 
                 if update_from_raw_conf:
-                    # add user feeded params
+                    # 添加用户提供的参数
                     user_feeded_params_set.add(full_config_key)
 
-                    # update user feeded deprecated param set
+                    # 更新用户提供废弃参数集
                     if full_config_key in deprecated_params_set:
                         feeded_deprecated_params_set.add(full_config_key)
 
-                # supported attr
+                # 支持的属性
                 attr = getattr(param, config_key)
                 if type(attr).__name__ in dir(builtins) or attr is None:
                     setattr(param, config_key, config_value)
 
                 else:
-                    # recursive set obj attr
+                    # 递归设置对象属性
                     sub_params = _recursive_update_param(
                         attr, config_value, depth + 1, prefix=f"{prefix}{config_key}."
                     )
@@ -187,6 +211,7 @@ class ComponentParamBase(ABC):
         return _recursive_update_param(param=self, config=conf, depth=0, prefix="")
 
     def extract_not_builtin(self):
+        """提取非内置类型的参数"""
         def _get_not_builtin_types(obj):
             ret_dict = {}
             for variable in obj.__dict__:
@@ -199,6 +224,7 @@ class ComponentParamBase(ABC):
         return _get_not_builtin_types(self)
 
     def validate(self):
+        """验证参数的有效性"""
         self.builtin_types = dir(builtins)
         self.func = {
             "ge": self._greater_equal_than,
@@ -226,6 +252,7 @@ class ComponentParamBase(ABC):
         self._validate_param(self, validation_json)
 
     def _validate_param(self, param_obj, validation_json):
+        """验证参数"""
         default_section = type(param_obj).__name__
         var_list = param_obj.__dict__
 
@@ -257,56 +284,67 @@ class ComponentParamBase(ABC):
 
     @staticmethod
     def check_string(param, description):
+        """检查参数是否为字符串类型"""
         if type(param).__name__ not in ["str"]:
             raise ValueError(description + " {} not supported, should be string type".format(param))
 
     @staticmethod
     def check_empty(param, description):
+        """检查参数是否为空"""
         if not param:
             raise ValueError(description + " does not support empty value.")
 
     @staticmethod
     def check_positive_integer(param, description):
+        """检查参数是否为正整数"""
         if type(param).__name__ not in ["int", "long"] or param <= 0:
             raise ValueError(description + " {} not supported, should be positive integer".format(param))
 
     @staticmethod
     def check_positive_number(param, description):
+        """检查参数是否为正数"""
         if type(param).__name__ not in ["float", "int", "long"] or param <= 0:
             raise ValueError(description + " {} not supported, should be positive numeric".format(param))
 
     @staticmethod
     def check_nonnegative_number(param, description):
+        """检查参数是否为非负数"""
         if type(param).__name__ not in ["float", "int", "long"] or param < 0:
             raise ValueError(description + " {} not supported, should be non-negative numeric".format(param))
 
     @staticmethod
     def check_decimal_float(param, description):
+        """检查参数是否为0-1之间的浮点数"""
         if type(param).__name__ not in ["float", "int"] or param < 0 or param > 1:
             raise ValueError(description + " {} not supported, should be a float number in range [0, 1]".format(param))
 
     @staticmethod
     def check_boolean(param, description):
+        """检查参数是否为布尔类型"""
         if type(param).__name__ != "bool":
             raise ValueError(description + " {} not supported, should be bool type".format(param))
 
     @staticmethod
     def check_open_unit_interval(param, description):
+        """检查参数是否在开区间(0,1)内"""
         if type(param).__name__ not in ["float"] or param <= 0 or param >= 1:
             raise ValueError(description + " should be a numeric number between 0 and 1 exclusively")
 
     @staticmethod
     def check_valid_value(param, description, valid_values):
+        """检查参数值是否在有效值列表中"""
         if param not in valid_values:
             raise ValueError(description + " {} is not supported, it should be in {}".format(param, valid_values))
 
     @staticmethod
     def check_defined_type(param, description, types):
+        """检查参数类型是否为指定类型之一"""
         if type(param).__name__ not in types:
             raise ValueError(description + " {} not supported, should be one of {}".format(param, types))
 
     @staticmethod
     def check_and_change_lower(param, valid_list, description=""):
+        """检查参数是否在有效列表中，并转换为小写"""
         if type(param).__name__ != "str":
             raise ValueError(description + " {} not supported, should be one of {}".format(param, valid_list))
 
@@ -318,14 +356,17 @@ class ComponentParamBase(ABC):
 
     @staticmethod
     def _greater_equal_than(value, limit):
+        """检查值是否大于等于限制值"""
         return value >= limit - settings.FLOAT_ZERO
 
     @staticmethod
     def _less_equal_than(value, limit):
+        """检查值是否小于等于限制值"""
         return value <= limit + settings.FLOAT_ZERO
 
     @staticmethod
     def _range(value, ranges):
+        """检查值是否在指定范围内"""
         in_range = False
         for left_limit, right_limit in ranges:
             if (
@@ -340,19 +381,23 @@ class ComponentParamBase(ABC):
 
     @staticmethod
     def _in(value, right_value_list):
+        """检查值是否在列表中"""
         return value in right_value_list
 
     @staticmethod
     def _not_in(value, wrong_value_list):
+        """检查值是否不在列表中"""
         return value not in wrong_value_list
 
     def _warn_deprecated_param(self, param_name, description):
+        """警告已废弃的参数"""
         if self._deprecated_params_set.get(param_name):
             logging.warning(
                 f"{description} {param_name} is deprecated and ignored in this version."
             )
 
     def _warn_to_deprecate_param(self, param_name, description, new_param):
+        """警告即将废弃的参数"""
         if self._deprecated_params_set.get(param_name):
             logging.warning(
                 f"{description} {param_name} will be deprecated in future release; "

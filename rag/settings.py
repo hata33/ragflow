@@ -13,3 +13,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+RAG 模块配置文件
+
+本模块为 RAG 包提供配置和常量定义。
+全局配置项通过 `common.settings` 模块统一管理。
+"""

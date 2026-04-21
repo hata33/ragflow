@@ -13,6 +13,27 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+手册文档解析模块
+
+本模块针对手册类文档（FAQ、用户手册等）进行了优化，
+特别适合问答格式的文档。
+
+支持的文件格式：
+- PDF: 便携式文档格式
+- DOCX: Microsoft Word 文档
+
+主要特点：
+- 自动识别问答结构
+- 支持问题层级识别
+- 智能分块保持问答完整性
+- 支持图片和表格处理
+
+使用场景：
+- FAQ 文档处理
+- 用户手册解析
+- 问答知识库构建
+"""
 
 import logging
 import copy
@@ -31,11 +52,36 @@ from common.parser_config_utils import normalize_layout_recognizer
 
 
 class Pdf(PdfParser):
+    """
+    手册文档专用 PDF 解析器
+
+    继承自 PdfParser，针对手册类 PDF 文档进行了优化。
+    使用 MANUAL 类型的模型规格。
+    """
+
     def __init__(self):
         self.model_speciess = ParserType.MANUAL.value
         super().__init__()
 
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
+        """
+        解析 PDF 文档
+
+        执行完整的 PDF 解析流程。
+
+        Args:
+            filename: PDF 文件名或路径
+            binary: PDF 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+            zoomin: 图片放大倍数（默认 3）
+            callback: 进度回调函数
+
+        Returns:
+            tuple: (sections, tbls)
+                - sections: 文本段落列表
+                - tbls: 表格列表
+        """
         from timeit import default_timer as timer
 
         start = timer()
@@ -68,10 +114,34 @@ class Pdf(PdfParser):
 
 
 class Docx(DocxParser):
+    """
+    手册文档专用 DOCX 解析器
+
+    继承自 DocxParser，针对问答格式的 DOCX 文档进行了优化。
+    自动识别问题和答案的层级结构。
+    """
+
     def __init__(self):
         pass
 
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None):
+        """
+        解析 DOCX 文档
+
+        识别问题和答案的层级结构，构建问答列表。
+
+        Args:
+            filename: DOCX 文件名或路径
+            binary: DOCX 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+            callback: 进度回调函数
+
+        Returns:
+            tuple: (ti_list, tbls)
+                - ti_list: 问答列表，每个元素为 (question, answer, image)
+                - tbls: 表格列表
+        """
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0
         last_answer, last_image = "", None
@@ -135,6 +205,29 @@ class Docx(DocxParser):
 
 
 def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+    """
+    解析手册文档并分块
+
+    支持的文件格式：pdf, docx
+    针对手册类文档进行了优化，保持问答结构的完整性。
+
+    Args:
+        filename: 文件名或路径
+        binary: 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        **kwargs: 其他配置参数
+
+    Returns:
+        list: 分块结果列表
+
+    Note:
+        - 自动使用 PDF 大纲识别标题层级
+        - 保持问答对的完整性
+        - 表格和图片使用视觉模型增强
+    """
     """
     Only pdf is supported.
     """

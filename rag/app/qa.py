@@ -13,6 +13,30 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+问答文档解析模块
+
+本模块针对问答格式的文档进行了优化，支持多种格式的问答数据。
+
+支持的文件格式：
+- Excel: XLSX/XLS（两列：问题和答案）
+- CSV: 逗号或 TAB 分隔的问答数据
+- TXT: TAB 或逗号分隔的问答数据
+- PDF: 包含问答结构的 PDF
+- Markdown: 使用标题标记问题的 MD 文件
+- DOCX: 包含问答结构的 Word 文档
+
+主要特点：
+- 自动识别问答结构
+- 支持多种分隔符
+- 智能处理变形行
+- 每对问答作为一个独立的块
+
+使用场景：
+- FAQ 文档处理
+- 问答知识库构建
+- 客服问题库索引
+"""
 
 import logging
 import re
@@ -33,7 +57,26 @@ from common.float_utils import get_float
 
 
 class Excel(ExcelParser):
+    """
+    问答文档专用 Excel 解析器
+
+    继承自 ExcelParser，针对问答格式的 Excel 文档进行了优化。
+    """
+
     def __call__(self, fnm, binary=None, callback=None):
+        """
+        解析问答 Excel 文档
+
+        提取两列数据：问题和答案。
+
+        Args:
+            fnm: Excel 文件名或路径
+            binary: Excel 文件的二进制内容（可选）
+            callback: 进度回调函数
+
+        Returns:
+            list: 问答对列表，每个元素为 (question, answer)
+        """
         if not binary:
             wb = load_workbook(fnm)
         else:
@@ -76,8 +119,36 @@ class Excel(ExcelParser):
 
 
 class Pdf(PdfParser):
+    """
+    问答文档专用 PDF 解析器
+
+    继承自 PdfParser，针对包含问答结构的 PDF 文档进行了优化。
+    自动识别问题和答案的边界。
+    """
+
     def __call__(self, filename, binary=None, from_page=0,
                  to_page=100000, zoomin=3, callback=None):
+        """
+        解析问答 PDF 文档
+
+        执行 OCR 和布局分析，识别问答结构。
+
+        Args:
+            filename: PDF 文件名或路径
+            binary: PDF 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+            zoomin: 图片放大倍数（默认 3）
+            callback: 进度回调函数
+
+        Returns:
+            tuple: (qai_list, tbls)
+                - qai_list: 问答对列表，每个元素为 (question, answer, image, positions)
+                - tbls: 表格列表
+
+        Raises:
+            ValueError: 无法识别问答结构时
+        """
         start = timer()
         callback(msg="OCR started")
         self.__images__(
@@ -306,15 +377,34 @@ def mdQuestionLevel(s):
 
 def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
     """
-        Excel and csv(txt) format files are supported.
-        If the file is in Excel format, there should be 2 column question and answer without header.
-        And question column is ahead of answer column.
-        And it's O.K if it has multiple sheets as long as the columns are rightly composed.
+    解析问答文档并分块
 
-        If it's in csv format, it should be UTF-8 encoded. Use TAB as delimiter to separate question and answer.
+    支持的文件格式：Excel, CSV, TXT, PDF, Markdown, DOCX
 
-        All the deformed lines will be ignored.
-        Every pair of Q&A will be treated as a chunk.
+    Excel 格式要求：
+        - 两列：问题和答案（无表头）
+        - 问题列在答案列之前
+        - 支持多个工作表
+
+    CSV/TXT 格式要求：
+        - UTF-8 编码
+        - 使用 TAB 或逗号分隔问题和答案
+
+    Args:
+        filename: 文件名或路径
+        binary: 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        **kwargs: 其他配置参数
+
+    Returns:
+        list: 分块结果列表，每个问答对作为一个独立的块
+
+    Note:
+        - 变形的行会被忽略
+        - 每对问答作为一个独立的块
     """
     eng = lang.lower() == "english"
     res = []

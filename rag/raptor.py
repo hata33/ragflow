@@ -34,6 +34,15 @@ Recursive Abstractive Processing for Tree-Organized Retrieval
 
 参考文献：
 - RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval
+
+Example:
+    >>> raptor = RecursiveAbstractiveProcessing4TreeOrganizedRetrieval(
+    ...     max_cluster=8,
+    ...     llm_model=llm_model,
+    ...     embd_model=embd_model,
+    ...     prompt="Summarize the following content:\\n{cluster_content}"
+    ... )
+    >>> chunks = raptor(chunks, random_state=42)
 """
 
 import asyncio

@@ -13,6 +13,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+实体解析模块
+
+本模块提供实体解析（Entity Resolution）功能，用于识别和合并
+知识图谱中的重复实体。
+
+主要功能：
+- 实体去重
+- 实体合并
+- 图谱更新
+- 实体关系解析
+
+使用场景：
+- 知识图谱构建
+- 实体消歧
+- 图谱质量提升
+"""
+
 import asyncio
 import logging
 import itertools
@@ -40,19 +58,36 @@ DEFAULT_RESOLUTION_RESULT_DELIMITER = "&&"
 
 @dataclass
 class EntityResolutionResult:
-    """Entity resolution result class definition."""
+    """
+    实体解析结果类
+
+    Attributes:
+        graph: 更新后的知识图谱
+        change: 图谱变更信息
+    """
     graph: nx.Graph
     change: GraphChange
 
 
 class EntityResolution(Extractor):
-    """Entity resolution class definition."""
+    """
+    实体解析类
 
-    _resolution_prompt: str
-    _output_formatter_prompt: str
-    _record_delimiter_key: str
-    _entity_index_delimiter_key: str
-    _resolution_result_delimiter_key: str
+    继承自 Extractor，提供实体解析功能。
+
+    Attributes:
+        _llm: LLM 模型实例
+        _resolution_prompt: 解析提示词模板
+        _output_formatter_prompt: 输出格式化提示词
+        _record_delimiter_key: 记录分隔符键
+        _entity_index_delimiter_key: 实体索引分隔符键
+        _resolution_result_delimiter_key: 解析结果分隔符键
+
+    Note:
+        - 使用 LLM 进行智能实体解析
+        - 支持异步处理
+        - 支持任务取消检查
+    """
 
     def __init__(
             self,
@@ -72,6 +107,29 @@ class EntityResolution(Extractor):
                        prompt_variables: dict[str, Any] | None = None,
                        callback: Callable | None = None,
                        task_id: str = "") -> EntityResolutionResult:
+        """
+        执行实体解析
+
+        对给定子图中的实体进行解析，识别和合并重复实体。
+
+        Args:
+            graph: 知识图谱
+            subgraph_nodes: 待处理的子图节点集合
+            prompt_variables: 提示词变量（可选）
+            callback: 进度回调函数
+            task_id: 任务 ID，用于取消检查
+
+        Returns:
+            EntityResolutionResult: 解析结果，包含更新后的图谱和变更信息
+
+        Raises:
+            TaskCanceledException: 当任务被取消时
+
+        Note:
+            - 使用 LLM 进行智能实体匹配
+            - 使用编辑距离计算实体相似度
+            - 支持增量更新图谱
+        """
         """Call method definition."""
         if prompt_variables is None:
             prompt_variables = {}

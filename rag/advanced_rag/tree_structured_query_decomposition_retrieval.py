@@ -13,6 +13,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+树形查询分解检索模块
+
+本模块实现了树形结构的查询分解和检索算法，
+通过递归地分解查询并从多个数据源检索信息，提高检索的全面性。
+
+主要特点：
+- 树形查询分解
+- 多数据源检索（知识库、网络、知识图谱）
+- 自动充分性检查
+- 递归深度检索
+
+使用场景：
+- 复杂问题回答
+- 多步骤信息检索
+- 深度研究型查询
+"""
+
 import asyncio
 import logging
 from functools import partial
@@ -24,12 +42,44 @@ from timeit import default_timer as timer
 
 
 class TreeStructuredQueryDecompositionRetrieval:
+    """
+    树形查询分解检索类
+
+    实现递归查询分解和多源检索功能。
+
+    Attributes:
+        chat_mdl: LLM 模型实例
+        prompt_config: 提示词配置
+        _kb_retrieve: 知识库检索函数
+        _kg_retrieve: 知识图谱检索函数
+        _lock: 异步锁，用于并发控制
+
+    Example:
+        >>> retriever = TreeStructuredQueryDecompositionRetrieval(
+        ...     chat_mdl=llm_bundle,
+        ...     prompt_config=config,
+        ...     kb_retrieve=kb_retrieve_func
+        ... )
+        >>> await retriever.research(chunk_info, question, query)
+    """
+
     def __init__(self,
                  chat_mdl: LLMBundle,
                  prompt_config: dict,
                  kb_retrieve: partial = None,
                  kg_retrieve: partial = None
                  ):
+        """
+        初始化树形查询分解检索器
+
+        Args:
+            chat_mdl: LLM 模型实例
+            prompt_config: 提示词配置，可能包含：
+                - tavily_api_key: Tavily API 密钥
+                - use_kg: 是否使用知识图谱
+            kb_retrieve: 知识库检索函数（可选）
+            kg_retrieve: 知识图谱检索函数（可选）
+        """
         self.chat_mdl = chat_mdl
         self.prompt_config = prompt_config
         self._kb_retrieve = kb_retrieve
@@ -37,6 +87,17 @@ class TreeStructuredQueryDecompositionRetrieval:
         self._lock = asyncio.Lock()
 
     async def _retrieve_information(self, search_query):
+        """
+        从不同数据源检索信息
+
+        按顺序检索：知识库 → 网络 → 知识图谱
+
+        Args:
+            search_query: 搜索查询
+
+        Returns:
+            dict: 检索结果，包含 chunks 和 doc_aggs
+        """
         """Retrieve information from different sources"""
         # 1. Knowledge base retrieval
         kbinfos = []
@@ -67,6 +128,19 @@ class TreeStructuredQueryDecompositionRetrieval:
         return kbinfos
 
     async def _async_update_chunk_info(self, chunk_info, kbinfos):
+        """
+        异步更新块信息
+
+        合并新检索的信息到现有块信息中，避免重复。
+
+        Args:
+            chunk_info: 现有块信息
+            kbinfos: 新检索的信息
+
+        Note:
+            - 如果是第一次检索，直接使用检索结果
+            - 否则合并新检索的信息，根据 chunk_id 和 doc_id 去重
+        """
         async with self._lock:
             """Update chunk information for citations"""
             if not chunk_info["chunks"]:
@@ -86,6 +160,22 @@ class TreeStructuredQueryDecompositionRetrieval:
                         chunk_info["doc_aggs"].append(d)
 
     async def research(self, chunk_info, question, query, depth=3, callback=None):
+        """
+        执行深度检索
+
+        公开接口，执行树形查询分解检索。
+
+        Args:
+            chunk_info: 块信息存储（会被更新）
+            question: 原始问题
+            query: 当前查询
+            depth: 最大检索深度（默认 3）
+            callback: 进度回调函数
+
+        Note:
+            - 发送 START_DEEP_RESEARCH 和 END_DEEP_RESEARCH 信号
+            - 递归检索直到达到最大深度或信息充分
+        """
         if callback:
             await callback("<START_DEEP_RESEARCH>")
         await self._research(chunk_info, question, query, depth, callback)
@@ -93,6 +183,27 @@ class TreeStructuredQueryDecompositionRetrieval:
             await callback("<END_DEEP_RESEARCH>")
 
     async def _research(self, chunk_info, question, query, depth=3, callback=None):
+        """
+        执行递归检索（内部实现）
+
+        递归地检索信息，检查充分性，生成下一步查询。
+
+        Args:
+            chunk_info: 块信息存储（会被更新）
+            question: 原始问题
+            query: 当前查询
+            depth: 剩余检索深度
+            callback: 进度回调函数
+
+        Returns:
+            str: 检索结果摘要
+
+        Processing Steps:
+            1. 检查深度限制
+            2. 执行多源检索
+            3. 检查信息充分性
+            4. 如果不充分，生成下一步查询并递归检索
+        """
         if depth == 0:
             #if callback:
             #    await callback("Reach the max search depth.")

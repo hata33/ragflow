@@ -13,6 +13,30 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+书籍文档解析模块
+
+本模块针对书籍类文档进行了优化，支持层次化结构解析和智能分块。
+
+支持的文件格式：
+- DOCX: Microsoft Word 文档
+- PDF: 便携式文档格式
+- TXT: 纯文本文档
+- HTML: 网页文档
+- DOC: 旧版 Word 文档（通过 Tika）
+
+主要特点：
+- 自动识别标题层级结构
+- 智能分块保持章节完整性
+- 支持目录页过滤
+- 支持表格和图片处理
+- 多种布局识别器支持
+
+使用场景：
+- 电子书处理
+- 技术手册解析
+- 长文档知识库构建
+"""
 
 import logging
 import re
@@ -31,7 +55,32 @@ from rag.utils.lazy_image import LazyImage
 
 
 class Pdf(PdfParser):
+    """
+    书籍专用 PDF 解析器
+
+    继承自 PdfParser，针对书籍类 PDF 文档进行了优化。
+    支持完整的 OCR、布局分析和表格识别流程。
+    """
+
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
+        """
+        解析 PDF 文档
+
+        执行完整的 PDF 解析流程，包括 OCR、布局分析、表格识别等。
+
+        Args:
+            filename: PDF 文件名或路径
+            binary: PDF 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+            zoomin: 图片放大倍数（默认 3）
+            callback: 进度回调函数
+
+        Returns:
+            tuple: (sections, tbls)
+                - sections: 文本段落列表
+                - tbls: 表格列表
+        """
         from timeit import default_timer as timer
 
         start = timer()
@@ -60,6 +109,33 @@ class Pdf(PdfParser):
 
 
 def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+    """
+    解析书籍文档并分块
+
+    支持的文件格式：docx, pdf, txt, html, doc
+    针对书籍文档进行了优化，保持章节结构的完整性。
+
+    Args:
+        filename: 文件名或路径
+        binary: 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        **kwargs: 其他配置参数
+            - parser_config: 解析器配置
+                - chunk_token_num: 块最大 token 数
+                - delimiter: 分隔符
+                - layout_recognize: 布局识别器
+                - table_context_size: 表格上下文大小
+                - image_context_size: 图片上下文大小
+
+    Returns:
+        list: 分块结果列表
+
+    Note:
+        由于书籍通常较长，建议设置合理的 page 范围以避免处理时间过长
+    """
     """
     Supported file formats are docx, pdf, txt.
     Since a book is long and not all the parts are useful, if it's a PDF,

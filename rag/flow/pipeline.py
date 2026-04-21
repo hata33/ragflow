@@ -13,6 +13,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+Pipeline 流程模块
+
+本模块提供了文档处理流程的执行和管理功能。
+
+主要功能：
+- DSL 解析和流程构建
+- 组件调度和执行
+- 进度跟踪和日志记录
+- 任务取消检查
+- 错误处理和恢复
+
+使用场景：
+- 文档处理工作流
+- Agent 流程编排
+- 异步任务执行
+"""
+
 import asyncio
 import datetime
 import json
@@ -26,6 +44,21 @@ from rag.utils.redis_conn import REDIS_CONN
 
 
 class Pipeline(Graph):
+    """
+    流程执行类
+
+    继承自 Graph，提供文档处理流程的执行功能。
+
+    Attributes:
+        _doc_id: 文档 ID
+        _flow_id: 流程 ID
+        _kb_id: 知识库 ID
+
+    Note:
+        - 支持从 DSL 字符串或字典构建流程
+        - 自动关联知识库信息
+        - 提供进度跟踪和日志记录功能
+    """
     def __init__(self, dsl: str|dict, tenant_id=None, doc_id=None, task_id=None, flow_id=None):
         if isinstance(dsl, dict):
             dsl = json.dumps(dsl, ensure_ascii=False)

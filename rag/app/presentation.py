@@ -13,6 +13,28 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+演示文稿解析模块
+
+本模块针对演示文稿（PPT、PPTX、PDF）进行了优化，
+每一页作为一个独立的分块处理。
+
+支持的文件格式：
+- PPT: Microsoft PowerPoint 97-2003
+- PPTX: Microsoft PowerPoint 2007+
+- PDF: 导出的演示文稿 PDF
+
+主要特点：
+- 每页作为一个独立的分块
+- 保存页面缩略图
+- 保持页面顺序
+- 支持多种布局识别器
+
+使用场景：
+- 演示文稿检索
+- 幻灯片内容索引
+- 演示知识库构建
+"""
 
 import copy
 import logging
@@ -32,10 +54,36 @@ from rag.utils.lazy_image import ensure_pil_image, is_image_like
 
 
 class Pdf(PdfParser):
+    """
+    演示文稿专用 PDF 解析器
+
+    继承自 PdfParser，针对演示文稿 PDF 进行了优化。
+    每页作为一个独立的块处理。
+    """
+
     def __init__(self):
         super().__init__()
 
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None, **kwargs):
+        """
+        解析演示文稿 PDF
+
+        执行完整的解析流程，每页作为一个独立的块。
+
+        Args:
+            filename: PDF 文件名或路径
+            binary: PDF 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+            zoomin: 图片放大倍数（默认 3）
+            callback: 进度回调函数
+            **kwargs: 其他参数
+
+        Returns:
+            tuple: (res, tbls)
+                - res: 每页的内容列表，每个元素为 (text, image)
+                - tbls: 表格列表（通常为空）
+        """
         # 1. OCR
         callback(msg="OCR started")
         self.__images__(filename if not binary else binary, zoomin, from_page, to_page, callback)
@@ -115,7 +163,32 @@ class Pdf(PdfParser):
 
 
 class PlainPdf(PlainParser):
+    """
+    演示文稿纯文本 PDF 解析器
+
+    继承自 PlainParser，直接提取 PDF 中的文本，
+    不进行 OCR 和布局分析。
+    """
+
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
+        """
+        解析演示文稿 PDF（纯文本模式）
+
+        直接提取 PDF 中的文本内容。
+
+        Args:
+            filename: PDF 文件名或路径
+            binary: PDF 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+            callback: 进度回调函数
+            **kwargs: 其他参数
+
+        Returns:
+            tuple: (page_txt, tbls)
+                - page_txt: 每页的文本列表
+                - tbls: 表格列表（通常为空）
+        """
         self.pdf = pdf2_read(filename if not binary else BytesIO(binary))
         page_txt = []
         for page in self.pdf.pages[from_page:to_page]:
@@ -126,9 +199,28 @@ class PlainPdf(PlainParser):
 
 def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, parser_config=None, **kwargs):
     """
-    The supported file formats are pdf, ppt, pptx.
-    Every page will be treated as a chunk. And the thumbnail of every page will be stored.
-    PPT file will be parsed by using this method automatically, setting-up for every PPT file is not necessary.
+    解析演示文稿并分块
+
+    支持的文件格式：pdf, ppt, pptx
+    每页作为一个独立的分块，并保存页面缩略图。
+
+    Args:
+        filename: 文件名或路径
+        binary: 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        parser_config: 解析器配置
+        **kwargs: 其他配置参数
+
+    Returns:
+        list: 分块结果列表，每个元素对应一页
+
+    Note:
+        - PPT 文件会自动使用此方法解析
+        - 每页包含文本和缩略图
+        - 支持 python-pptx 和 Tika 两种解析方式
     """
     if parser_config is None:
         parser_config = {}

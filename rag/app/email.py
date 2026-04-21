@@ -13,6 +13,27 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+邮件文件解析模块
+
+本模块提供邮件文件（EML 格式）的解析功能。
+
+支持的功能：
+- 提取邮件头信息（From, To, Subject 等）
+- 提取邮件正文（纯文本和 HTML）
+- 处理附件（递归解析）
+- 支持多种字符编码自动检测
+
+主要特点：
+- 自动处理多部分邮件
+- 支持嵌套附件解析
+- 智能编码检测（UTF-8, GB2312, GBK, GB18030, Latin1）
+
+使用场景：
+- 邮件归档和检索
+- 邮件内容分析
+- 邮件知识库构建
+"""
 
 import logging
 from email import policy
@@ -34,6 +55,34 @@ def chunk(
         callback=None,
         **kwargs,
 ):
+    """
+    解析邮件文件
+
+    解析 EML 格式的邮件文件，提取头信息、正文和附件。
+
+    Args:
+        filename: 邮件文件名
+        binary: 邮件文件的二进制内容（可选）
+        from_page: 未使用（保留参数兼容性）
+        to_page: 未使用（保留参数兼容性）
+        lang: 语言设置
+        callback: 进度回调函数
+        **kwargs: 其他配置参数
+
+    Returns:
+        list: 分块结果列表，包含邮件正文和附件内容
+
+    Processing Steps:
+        1. 解析邮件头信息
+        2. 提取纯文本正文
+        3. 提取 HTML 正文
+        4. 合并正文内容
+        5. 分块处理
+        6. 递归解析附件
+
+    Note:
+        目前仅支持 EML 格式
+    """
     """
     Only eml is supported
     """

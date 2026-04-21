@@ -13,6 +13,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+学术论文解析模块
+
+本模块针对学术论文（PDF 格式）进行了优化，
+能够提取论文的标题、作者、摘要等关键信息。
+
+主要特点：
+- 自动提取论文标题
+- 自动提取作者列表
+- 自动提取摘要内容
+- 智能识别双栏布局
+- 保持章节层级结构
+
+使用场景：
+- 论文检索和索引
+- 学术知识库构建
+- 论文内容分析
+"""
 
 import logging
 import copy
@@ -29,12 +47,44 @@ from common.parser_config_utils import normalize_layout_recognizer
 
 
 class Pdf(PdfParser):
+    """
+    学术论文专用 PDF 解析器
+
+    继承自 PdfParser，针对学术论文 PDF 文档进行了优化。
+    使用 PAPER 类型的模型规格。
+    """
+
     def __init__(self):
         self.model_speciess = ParserType.PAPER.value
         super().__init__()
 
     def __call__(self, filename, binary=None, from_page=0,
                  to_page=100000, zoomin=3, callback=None):
+        """
+        解析学术论文 PDF
+
+        提取论文的标题、作者、摘要等关键信息。
+
+        Args:
+            filename: PDF 文件名或路径
+            binary: PDF 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+            zoomin: 图片放大倍数（默认 3）
+            callback: 进度回调函数
+
+        Returns:
+            dict: 包含以下键的字典
+                - title: 论文标题
+                - authors: 作者列表
+                - abstract: 摘要内容
+                - sections: 正文段落列表
+                - tables: 表格列表
+
+        Note:
+            - 如果 from_page > 0，则跳过标题和摘要提取
+            - 自动检测双栏布局
+        """
         from timeit import default_timer as timer
         start = timer()
         callback(msg="OCR started")
@@ -149,8 +199,27 @@ class Pdf(PdfParser):
 def chunk(filename, binary=None, from_page=0, to_page=100000,
           lang="Chinese", callback=None, **kwargs):
     """
-        Only pdf is supported.
-        The abstract of the paper will be sliced as an entire chunk, and will not be sliced partly.
+    解析学术论文 PDF 并分块
+
+    支持的文件格式：pdf
+    提取论文的标题、作者、摘要等关键信息，并对正文进行分块。
+
+    Args:
+        filename: PDF 文件名或路径
+        binary: PDF 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        **kwargs: 其他配置参数
+
+    Returns:
+        list: 分块结果列表，摘要作为独立的块
+
+    Note:
+        - 摘要作为完整的块，不会被切分
+        - 标题和作者信息会被提取并存储
+        - 正文按章节结构进行分块
     """
     parser_config = kwargs.get(
         "parser_config", {

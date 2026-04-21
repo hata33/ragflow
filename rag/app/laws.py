@@ -13,6 +13,29 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+法律文档解析模块
+
+本模块针对法律类文档进行了优化，支持条款、章节等层次化结构。
+
+支持的文件格式：
+- DOCX: Microsoft Word 文档
+- PDF: 便携式文档格式
+- TXT: 纯文本文档
+- HTML: 网页文档
+- DOC: 旧版 Word 文档（通过 Tika）
+
+主要特点：
+- 自动识别条款编号结构
+- 树形结构合并
+- 支持目录页过滤
+- 保持条款层级关系
+
+使用场景：
+- 法律法规检索
+- 合同文档分析
+- 法条知识库构建
+"""
 
 import logging
 import re
@@ -29,10 +52,28 @@ from common.parser_config_utils import normalize_layout_recognizer
 
 
 class Docx(DocxParser):
+    """
+    法律文档专用 DOCX 解析器
+
+    继承自 DocxParser，针对法律类 DOCX 文档进行了优化。
+    支持识别条款编号和构建树形结构。
+    """
+
     def __init__(self):
         pass
 
     def __clean(self, line):
+        """
+        清理文本行
+
+        将全角空格替换为半角空格，并去除首尾空白。
+
+        Args:
+            line: 待清理的文本行
+
+        Returns:
+            str: 清理后的文本行
+        """
         line = re.sub(r"\u3000", " ", line).strip()
         return line
 
@@ -94,11 +135,36 @@ class Docx(DocxParser):
 
 
 class Pdf(PdfParser):
+    """
+    法律文档专用 PDF 解析器
+
+    继承自 PdfParser，针对法律类 PDF 文档进行了优化。
+    使用 LAWS 类型的模型规格。
+    """
+
     def __init__(self):
         self.model_speciess = ParserType.LAWS.value
         super().__init__()
 
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
+        """
+        解析 PDF 文档
+
+        执行 OCR 和布局分析，提取文本内容。
+
+        Args:
+            filename: PDF 文件名或路径
+            binary: PDF 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+            zoomin: 图片放大倍数（默认 3）
+            callback: 进度回调函数
+
+        Returns:
+            tuple: (sections, tables)
+                - sections: 文本段落列表
+                - tables: 表格列表（始终为 None）
+        """
         from timeit import default_timer as timer
 
         start = timer()
@@ -118,6 +184,28 @@ class Pdf(PdfParser):
 
 
 def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+    """
+    解析法律文档并分块
+
+    支持的文件格式：docx, pdf, txt, html, doc
+    针对法律文档进行了优化，保持条款结构的完整性。
+
+    Args:
+        filename: 文件名或路径
+        binary: 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        **kwargs: 其他配置参数
+
+    Returns:
+        list: 分块结果列表
+
+    Note:
+        - 自动移除目录页
+        - 使用树形合并保持条款层级
+    """
     """
     Supported file formats are docx, pdf, txt.
     """

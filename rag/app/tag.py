@@ -13,6 +13,27 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+标签文档解析模块
+
+本模块针对内容+标签格式的文档进行了优化。
+
+支持的文件格式：
+- Excel: XLSX/XLS（两列：内容和标签）
+- CSV: TAB 或逗号分隔的内容和标签
+- TXT: TAB 或逗号分隔的内容和标签
+
+主要特点：
+- 内容和标签分开存储
+- 标签支持多个（逗号分隔）
+- 每行作为一个独立的块
+
+使用场景：
+- 标注数据索引
+- 分类文档检索
+- 标签过滤查询
+"""
+
 import json
 import re
 import csv
@@ -36,15 +57,33 @@ def beAdoc(d, q, a, eng, row_num=-1):
 
 def chunk(filename, binary=None, lang="Chinese", callback=None, **kwargs):
     """
-        Excel and csv(txt) format files are supported.
-        If the file is in Excel format, there should be 2 column content and tags without header.
-        And content column is ahead of tags column.
-        And it's O.K if it has multiple sheets as long as the columns are rightly composed.
+    解析标签文档并分块
 
-        If it's in csv format, it should be UTF-8 encoded. Use TAB as delimiter to separate content and tags.
+    支持的文件格式：Excel, CSV, TXT
 
-        All the deformed lines will be ignored.
-        Every pair will be treated as a chunk.
+    Excel 格式要求：
+        - 两列：内容和标签（无表头）
+        - 内容列在标签列之前
+        - 支持多个工作表
+
+    CSV/TXT 格式要求：
+        - UTF-8 编码
+        - 使用 TAB 或逗号分隔内容和标签
+        - 标签支持多个（逗号分隔）
+
+    Args:
+        filename: 文件名或路径
+        binary: 文件的二进制内容（可选）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        **kwargs: 其他配置参数
+
+    Returns:
+        list: 分块结果列表，每个内容-标签对作为一个独立的块
+
+    Note:
+        - 变形的行会被忽略
+        - 标签存储在 tag_kwd 字段中
     """
     eng = lang.lower() == "english"
     res = []
@@ -123,6 +162,22 @@ def chunk(filename, binary=None, lang="Chinese", callback=None, **kwargs):
 
 
 def label_question(question, kbs):
+    """
+    为问题打标签
+
+    使用配置的标签知识库为问题生成相关标签。
+
+    Args:
+        question: 待打标签的问题
+        kbs: 知识库列表
+
+    Returns:
+        list: 相关标签列表，如果没有配置标签知识库则返回 None
+
+    Note:
+        - 需要在知识库配置中设置 tag_kb_ids
+        - 使用检索系统从标签知识库中查找相关标签
+    """
     from api.db.services.knowledgebase_service import KnowledgebaseService
     from rag.graphrag.utils import get_tags_from_cache, set_tags_to_cache
     tags = None

@@ -13,6 +13,28 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+表格文档解析模块
+
+本模块针对表格类文档进行了优化，支持将表格每行作为独立的分块处理。
+
+支持的文件格式：
+- Excel: XLSX/XLS 电子表格
+- CSV: 逗号分隔的表格数据
+- TXT: TAB 分隔的表格数据
+
+主要特点：
+- 智能识别表头
+- 自动检测数据类型
+- 支持多级表头
+- 支持合并单元格
+- 每行作为一个独立的块
+
+使用场景：
+- 结构化数据索引
+- 表格内容检索
+- 数据库表格导入
+"""
 
 import copy
 import csv
@@ -37,7 +59,32 @@ from common import settings
 
 
 class Excel(ExcelParser):
+    """
+    表格文档专用 Excel 解析器
+
+    继承自 ExcelParser，针对表格类 Excel 文档进行了优化。
+    支持多级表头、合并单元格和图片处理。
+    """
+
     def __call__(self, fnm, binary=None, from_page=0, to_page=10000000000, callback=None, **kwargs):
+        """
+        解析表格 Excel 文档
+
+        提取表格数据，每行作为一个独立的记录。
+
+        Args:
+            fnm: Excel 文件名或路径
+            binary: Excel 文件的二进制内容（可选）
+            from_page: 起始行号（默认 0）
+            to_page: 结束行号（默认 10000000000）
+            callback: 进度回调函数
+            **kwargs: 其他配置参数
+
+        Returns:
+            tuple: (res, tbls)
+                - res: DataFrame 列表
+                - tbls: 图片列表
+        """
         if not binary:
             wb = Excel._load_excel_to_workbook(fnm)
         else:
@@ -359,17 +406,38 @@ def column_data_type(arr):
 
 def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang="Chinese", callback=None, **kwargs):
     """
-    Excel and csv(txt) format files are supported.
-    For csv or txt file, the delimiter between columns is TAB.
-    The first line must be column headers.
-    Column headers must be meaningful terms inorder to make our NLP model understanding.
-    It's good to enumerate some synonyms using slash '/' to separate, and even better to
-    enumerate values using brackets like 'gender/sex(male, female)'.
-    Here are some examples for headers:
+    解析表格文档并分块
+
+    支持的文件格式：Excel, CSV, TXT
+
+    表头要求：
+        - 第一行必须是列名
+        - 列名应该是有意义的术语
+        - 可以使用斜杠 '/' 分隔同义词
+        - 可以使用括号枚举值，如 'gender/sex(male, female)'
+
+    表头示例：
         1. supplier/vendor\tcolor(yellow, red, brown)\tgender/sex(male, female)\tsize(M,L,XL,XXL)
         2. 姓名/名字\t电话/手机/微信\t最高学历（高中，职高，硕士，本科，博士，初中，中技，中专，专科，专升本，MPA，MBA，EMBA）
 
-    Every row in table will be treated as a chunk.
+    Args:
+        filename: 文件名或路径
+        binary: 文件的二进制内容（可选）
+        from_page: 起始行号（默认 0）
+        to_page: 结束行号（默认 10000000000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        **kwargs: 其他配置参数
+            - delimiter: 自定义分隔符（用于 TXT 文件）
+
+    Returns:
+        list: 分块结果列表，每行作为一个独立的块
+
+    Note:
+        - 每行作为一个独立的块
+        - 自动检测列数据类型（int, float, text, datetime, bool）
+        - 支持 Infinity/OceanBase 的 JSON 存储
+    """
     """
     tbls = []
     is_english = lang.lower() == "english"

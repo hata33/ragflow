@@ -13,6 +13,34 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+音频文件解析模块
+
+本模块提供音频文件的语音转文字功能，支持多种音频格式。
+
+支持的音频格式：
+- WAV: .da, .wave, .wav
+- MP3: .mp3
+- AAC: .aac
+- FLAC: .flac
+- OGG: .ogg, .oggvorbis
+- AIFF: .aiff
+- AU: .au
+- MIDI: .midi
+- WMA: .wma
+- 其他格式: .realaudio, .vqf, .ape
+
+主要功能：
+- 使用 Sequence2Txt LLM 模型进行语音识别
+- 自动检测音频格式
+- 临时文件处理和清理
+
+使用场景：
+- 音频会议记录转录
+- 语音笔记处理
+- 音频内容索引
+"""
+
 import logging
 import os
 import re
@@ -25,6 +53,32 @@ from rag.nlp import rag_tokenizer, tokenize
 
 
 def chunk(filename, binary, tenant_id, lang, callback=None, **kwargs):
+    """
+    解析音频文件并转录为文字
+
+    使用 LLM 的语音识别功能将音频内容转换为文字，然后进行分词处理。
+
+    Args:
+        filename: 音频文件名
+        binary: 音频文件的二进制内容
+        tenant_id: 租户 ID，用于获取模型配置
+        lang: 语言设置（影响分词策略）
+        callback: 进度回调函数
+        **kwargs: 其他参数
+
+    Returns:
+        list: 包含转录文本的单元素列表，失败时返回空列表
+
+    Processing Steps:
+        1. 验证文件扩展名
+        2. 创建临时文件
+        3. 调用 Sequence2Txt LLM 进行转录
+        4. 对转录结果进行分词
+        5. 清理临时文件
+
+    Raises:
+        RuntimeError: 文件扩展名不支持时
+    """
     doc = {"docnm_kwd": filename, "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", filename))}
     doc["title_sm_tks"] = rag_tokenizer.fine_grained_tokenize(doc["title_tks"])
 

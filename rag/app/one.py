@@ -13,6 +13,30 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+单文档解析模块
+
+本模块将整个文档作为一个分块处理，保持文档的原始顺序。
+
+支持的文件格式：
+- DOCX: Microsoft Word 文档
+- PDF: 便携式文档格式
+- Excel: XLSX/XLS 电子表格
+- TXT: 纯文本文档
+- Markdown: MD 文档
+- HTML: 网页文档
+- DOC: 旧版 Word 文档（通过 Tika）
+
+主要特点：
+- 整个文档作为一个分块
+- 保持原始文本顺序
+- 支持表格和图片处理
+
+使用场景：
+- 短文档处理
+- 需要保持完整性的文档
+- 表格型文档
+"""
 
 import logging
 from io import BytesIO
@@ -28,7 +52,31 @@ from common.parser_config_utils import normalize_layout_recognizer
 
 
 class Pdf(PdfParser):
+    """
+    单文档解析专用 PDF 解析器
+
+    继承自 PdfParser，将整个 PDF 内容作为一个块处理。
+    """
+
     def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
+        """
+        解析 PDF 文档
+
+        执行 OCR、布局分析和表格识别，保持原始文本顺序。
+
+        Args:
+            filename: PDF 文件名或路径
+            binary: PDF 文件的二进制内容（可选）
+            from_page: 起始页码（默认 0）
+            to_page: 结束页码（默认 100000）
+            zoomin: 图片放大倍数（默认 3）
+            callback: 进度回调函数
+
+        Returns:
+            tuple: (sections, tbls)
+                - sections: 文本段落列表（按位置排序）
+                - tbls: 表格列表
+        """
         from timeit import default_timer as timer
 
         start = timer()
@@ -57,8 +105,27 @@ class Pdf(PdfParser):
 
 def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
     """
-    Supported file formats are docx, pdf, excel, txt.
-    One file forms a chunk which maintains original text order.
+    解析文档并作为单个块处理
+
+    支持的文件格式：docx, pdf, excel, txt, markdown, html, doc
+    整个文档作为一个分块，保持原始文本顺序。
+
+    Args:
+        filename: 文件名或路径
+        binary: 文件的二进制内容（可选）
+        from_page: 起始页码（默认 0）
+        to_page: 结束页码（默认 100000）
+        lang: 语言设置（默认 "Chinese"）
+        callback: 进度回调函数
+        **kwargs: 其他配置参数
+
+    Returns:
+        list: 包含单个文档块的列表
+
+    Note:
+        - 整个文档作为一个分块
+        - 保持原始文本顺序
+        - 表格和图片会被合并到文本中
     """
     parser_config = kwargs.get("parser_config", {"chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC"})
     eng = lang.lower() == "english"  # is_english(cks)

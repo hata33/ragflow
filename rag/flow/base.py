@@ -13,6 +13,18 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+Flow 基础模块
+
+本模块定义了流程处理的基础类和参数类。
+
+主要功能：
+- 流程参数基类定义
+- 流程处理基类定义
+- 超时控制
+- 错误处理和日志记录
+"""
+
 import asyncio
 import logging
 import os
@@ -24,6 +36,15 @@ from common.connection_utils import timeout
 
 
 class ProcessParamBase(ComponentParamBase):
+    """
+    流程参数基类
+
+    定义流程组件的参数配置。
+
+    Attributes:
+        timeout: 超时时间（秒）
+        persist_logs: 是否持久化日志
+    """
     def __init__(self):
         super().__init__()
         self.timeout = 100000000
@@ -31,6 +52,19 @@ class ProcessParamBase(ComponentParamBase):
 
 
 class ProcessBase(ComponentBase):
+    """
+    流程处理基类
+
+    提供流程组件的基础功能，包括调用、错误处理、进度回调等。
+
+    Attributes:
+        继承自 ComponentBase 的所有属性
+
+    Note:
+        - 支持超时控制
+        - 支持异常默认值
+        - 支持进度回调
+    """
     def __init__(self, pipeline, id, param: ProcessParamBase):
         super().__init__(pipeline, id, param)
         if hasattr(self._canvas, "callback"):

@@ -13,6 +13,27 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+"""
+RAGFlow 检索性能基准测试模块
+
+本模块提供对 RAGFlow 检索系统进行标准化性能测试的功能。
+支持多个公开基准数据集：MS MARCO、TriviaQA、MIRACL。
+
+主要功能：
+- 构建测试数据的检索索引
+- 执行检索性能评估
+- 计算标准指标（nDCG@10、MAP@5、MRR@10）
+- 生成详细的评估报告
+
+使用方法：
+    python benchmark.py <max_docs> <kb_id> <dataset> <dataset_path> [<miracl_corpus_path>]
+
+支持的数据集：
+    - ms_marco_v1.1: Microsoft Machine Reading Comprehension Dataset
+    - trivia_qa: Trivia Question Answering Dataset
+    - miracl: Multilingual Information Retrieval Across a Continuum of Languages
+"""
+
 import asyncio
 import json
 import os
@@ -38,6 +59,27 @@ max_docs = sys.maxsize
 
 
 class Benchmark:
+    """
+    RAGFlow 检索性能基准测试类
+
+    提供对检索系统进行标准化性能评估的功能，
+    支持多个公开基准数据集的索引构建和性能测试。
+
+    Attributes:
+        kb_id: 知识库 ID
+        similarity_threshold: 相似度阈值
+        vector_similarity_weight: 向量相似度权重
+        embd_mdl: 嵌入模型实例
+        tenant_id: 租户 ID
+        index_name: 索引名称
+        initialized_index: 索引是否已初始化
+
+    Example:
+        >>> benchmark = Benchmark(kb_id="your_kb_id")
+        >>> benchmark("ms_marco_v1.1", "/path/to/dataset")
+    """
+
+    def __init__(self, kb_id):
     def __init__(self, kb_id):
         self.kb_id = kb_id
         e, self.kb = KnowledgebaseService.get_by_id(kb_id)
@@ -53,6 +95,21 @@ class Benchmark:
         self.initialized_index = False
 
     def _get_retrieval(self, qrels):
+        """
+        执行检索并返回结果
+
+        对给定的查询相关性数据执行检索，并返回检索结果。
+
+        Args:
+            qrels: 查询相关性字典，格式为 {query: {doc_id: relevance}}
+
+        Returns:
+            dict: 检索结果，格式为 {query: {doc_id: similarity_score}}
+
+        Note:
+            会等待 20 秒以确保 ES 和 Infinity 索引准备就绪
+        """
+        # Need to wait for the ES and Infinity index to be ready
         # Need to wait for the ES and Infinity index to be ready
         time.sleep(20)
         run = defaultdict(dict)
@@ -70,6 +127,23 @@ class Benchmark:
         return run
 
     def embedding(self, docs):
+        """
+        为文档列表生成向量嵌入
+
+        使用嵌入模型为文档内容生成向量表示。
+
+        Args:
+            docs: 文档列表，每个文档包含 content_with_weight 字段
+
+        Returns:
+            tuple: (docs, vector_size)
+                - docs: 添加了向量字段的文档列表
+                - vector_size: 向量维度大小
+
+        Raises:
+            AssertionError: 当文档数量与嵌入数量不匹配时
+        """
+        texts = [d["content_with_weight"] for d in docs]
         texts = [d["content_with_weight"] for d in docs]
         embeddings, _ = self.embd_mdl.encode(texts)
         assert len(docs) == len(embeddings)
@@ -81,6 +155,18 @@ class Benchmark:
         return docs, vector_size
 
     def init_index(self, vector_size: int):
+        """
+        初始化文档存储索引
+
+        创建或重新创建文档存储索引。
+
+        Args:
+            vector_size: 向量维度大小
+
+        Note:
+            如果索引已存在，会先删除再创建
+        """
+        if self.initialized_index:
         if self.initialized_index:
             return
         if settings.docStoreConn.index_exist(self.index_name, self.kb_id):
@@ -89,6 +175,24 @@ class Benchmark:
         self.initialized_index = True
 
     def ms_marco_index(self, file_path, index_name):
+        """
+        构建 MS MARCO v1.1 数据集索引
+
+        从 MS MARCO 数据集文件中读取数据并构建检索索引。
+
+        Args:
+            file_path: 数据集文件路径
+            index_name: 索引名称
+
+        Returns:
+            tuple: (qrels, texts)
+                - qrels: 查询相关性字典
+                - texts: 文档内容字典 {doc_id: text}
+
+        Note:
+            支持读取 parquet 格式的数据文件
+        """
+        qrels = defaultdict(dict)
         qrels = defaultdict(dict)
         texts = defaultdict(dict)
         docs_count = 0
@@ -130,6 +234,21 @@ class Benchmark:
         return qrels, texts
 
     def trivia_qa_index(self, file_path, index_name):
+        """
+        构建 TriviaQA 数据集索引
+
+        从 TriviaQA 数据集文件中读取数据并构建检索索引。
+
+        Args:
+            file_path: 数据集文件路径
+            index_name: 索引名称
+
+        Returns:
+            tuple: (qrels, texts)
+                - qrels: 查询相关性字典
+                - texts: 文档内容字典 {doc_id: text}
+        """
+        qrels = defaultdict(dict)
         qrels = defaultdict(dict)
         texts = defaultdict(dict)
         docs_count = 0
@@ -170,6 +289,22 @@ class Benchmark:
         return qrels, texts
 
     def miracl_index(self, file_path, corpus_path, index_name):
+        """
+        构建 MIRACL 数据集索引
+
+        从 MIRACL 多语言数据集文件中读取数据并构建检索索引。
+
+        Args:
+            file_path: MIRACL 数据集路径
+            corpus_path: 语料库路径
+            index_name: 索引名称
+
+        Returns:
+            tuple: (qrels, texts)
+                - qrels: 查询相关性字典
+                - texts: 文档内容字典 {doc_id: text}
+        """
+        corpus_total = {}
         corpus_total = {}
         for corpus_file in os.listdir(corpus_path):
             tmp_data = pd.read_json(os.path.join(corpus_path, corpus_file), lines=True)
@@ -225,6 +360,25 @@ class Benchmark:
         return qrels, texts
 
     def save_results(self, qrels, run, texts, dataset, file_path):
+        """
+        保存基准测试结果
+
+        将评估结果保存为 JSON 和 Markdown 格式。
+
+        Args:
+            qrels: 查询相关性数据
+            run: 检索结果数据
+            texts: 文档内容字典
+            dataset: 数据集名称
+            file_path: 保存路径
+
+        Note:
+            会生成三个文件：
+            - {dataset}.qrels.json: 查询相关性数据
+            - {dataset}.run.json: 检索结果数据
+            - {dataset}_result.md: 详细评估报告
+        """
+        keep_result = []
         keep_result = []
         run_keys = list(run.keys())
         for run_i in tqdm(range(len(run_keys)), desc="Calculating ndcg@10 for single query"):
@@ -245,6 +399,27 @@ class Benchmark:
         print(os.path.join(file_path, dataset + '_result.md'), 'Saved!')
 
     def __call__(self, dataset, file_path, miracl_corpus=''):
+        """
+        执行基准测试
+
+        根据指定的数据集类型执行完整的基准测试流程。
+
+        Args:
+            dataset: 数据集名称，支持：
+                - "ms_marco_v1.1": MS MARCO v1.1 数据集
+                - "trivia_qa": TriviaQA 数据集
+                - "miracl": MIRACL 多语言数据集
+            file_path: 数据集文件路径
+            miracl_corpus: MIRACL 语料库路径（仅当 dataset="miracl" 时需要）
+
+        Raises:
+            SystemExit: 当参数不正确时
+
+        Example:
+            >>> benchmark = Benchmark(kb_id)
+            >>> benchmark("ms_marco_v1.1", "/path/to/ms_marco")
+        """
+        if dataset == "ms_marco_v1.1":
         if dataset == "ms_marco_v1.1":
             self.tenant_id = "benchmark_ms_marco_v11"
             self.index_name = search.index_name(self.tenant_id)
