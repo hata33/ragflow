@@ -43,7 +43,7 @@ from deepdoc.parser.utils import extract_pdf_outlines
 
 
 class TencentCloudAPIClient:
-    """Tencent Cloud API client using official SDK"""
+    """基于腾讯云官方 SDK 的文档解析客户端。"""
 
     def __init__(self, secret_id, secret_key, region):
         self.secret_id = secret_id
@@ -51,34 +51,34 @@ class TencentCloudAPIClient:
         self.region = region
         self.outlines = []
 
-        # Create credentials
+        # 组装腾讯云鉴权信息。
         self.cred = credential.Credential(secret_id, secret_key)
 
-        # Instantiate an http option, optional, can be skipped if no special requirements
+        # 配置请求端点。
         self.httpProfile = HttpProfile()
         self.httpProfile.endpoint = "lkeap.tencentcloudapi.com"
 
-        # Instantiate a client option, optional, can be skipped if no special requirements
+        # 配置客户端基础行为。
         self.clientProfile = ClientProfile()
         self.clientProfile.httpProfile = self.httpProfile
 
-        # Instantiate the client object for the product to be requested, clientProfile is optional
+        # 创建具体的 LKEAP 客户端实例。
         self.client = lkeap_client.LkeapClient(self.cred, region, self.clientProfile)
 
     def reconstruct_document_sse(self, file_type, file_url=None, file_base64=None, file_start_page=1, file_end_page=1000, config=None):
-        """Call document parsing API using official SDK"""
+        """调用腾讯云流式文档解析接口。"""
         try:
-            # Instantiate a request object, each interface corresponds to a request object
+            # 每个 API 都对应一个请求对象，这里先构造请求实例。
             req = models.ReconstructDocumentSSERequest()
 
-            # Build request parameters
+            # 组装基础请求参数。
             params = {
                 "FileType": file_type,
                 "FileStartPageNumber": file_start_page,
                 "FileEndPageNumber": file_end_page,
             }
 
-            # According to Tencent Cloud API documentation, either FileUrl or FileBase64 parameter must be provided, if both are provided only FileUrl will be used
+            # 按接口约定二选一：优先使用 FileUrl，否则退化为 Base64 上传。
             if file_url:
                 params["FileUrl"] = file_url
                 logging.info(f"[TCADP] Using file URL: {file_url}")
@@ -93,11 +93,10 @@ class TencentCloudAPIClient:
 
             req.from_json_string(json.dumps(params))
 
-            # The returned resp is an instance of ReconstructDocumentSSEResponse, corresponding to the request object
+            # SDK 可能返回流式生成器，也可能返回完整响应对象。
             resp = self.client.ReconstructDocumentSSE(req)
             parser_result = {}
 
-            # Output json format string response
             if isinstance(resp, types.GeneratorType):  # Streaming response
                 logging.info("[TCADP] Detected streaming response")
                 for event in resp:
@@ -114,23 +113,23 @@ class TencentCloudAPIClient:
                                 logging.info(f"[TCADP] Success pages: {data_dict.get('SuccessPageNum')}")
                                 logging.info(f"[TCADP] Failed pages: {data_dict.get('FailPageNum')}")
 
-                                # Print failed page information
+                                # 记录失败页，便于定位具体页面问题。
                                 failed_pages = data_dict.get("FailedPages", [])
                                 if failed_pages:
                                     logging.warning("[TCADP] Failed parsing pages:")
                                     for page in failed_pages:
                                         logging.warning(f"[TCADP]   Page number: {page.get('PageNumber')}, Error: {page.get('ErrorMsg')}")
 
-                                # Check if there is a download link
+                                # 成功后通常会返回结果包下载地址。
                                 download_url = data_dict.get("DocumentRecognizeResultUrl")
                                 if download_url:
                                     logging.info(f"[TCADP] Got download link: {download_url}")
                                 else:
                                     logging.warning("[TCADP] No download link obtained")
 
-                                break  # Found final result, exit loop
+                                break
                             else:
-                                # Print progress information
+                                # 中间事件主要用于汇报进度。
                                 progress = data_dict.get("Progress", "0")
                                 logging.info(f"[TCADP] Progress: {progress}%")
                         except json.JSONDecodeError as e:
@@ -164,16 +163,16 @@ class TencentCloudAPIClient:
             return None
 
     def download_result_file(self, download_url, output_dir):
-        """Download parsing result file"""
+        """下载腾讯云解析结果压缩包。"""
         if not download_url:
             logging.warning("[TCADP] No downloadable result file")
             return None
 
         try:
-            # Ensure output directory exists
+            # 先确保输出目录存在。
             os.makedirs(output_dir, exist_ok=True)
 
-            # Generate filename
+            # 用时间戳生成本地结果文件名，避免覆盖。
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"tcadp_result_{timestamp}.zip"
             file_path = os.path.join(output_dir, filename)
@@ -198,30 +197,32 @@ class TencentCloudAPIClient:
 
 
 class TCADPParser(RAGFlowPdfParser):
+    """腾讯云文档解析适配器。"""
+
     def __init__(self, secret_id: str = None, secret_key: str = None, region: str = "ap-guangzhou",
                  table_result_type: str = None, markdown_image_response_type: str = None):
         super().__init__()
 
-        # First initialize logger
+        # 先初始化日志，便于后续记录配置来源和回退路径。
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        # Log received parameters
+        # 记录传入参数，方便排查配置来源。
         self.logger.info(f"[TCADP] Initializing with parameters - table_result_type: {table_result_type}, markdown_image_response_type: {markdown_image_response_type}")
 
-        # Priority: read configuration from RAGFlow configuration system (service_conf.yaml)
+        # 优先从 RAGFlow 配置系统读取，如果没有再退回到显式参数或默认值。
         try:
             tcadp_parser = get_base_config("tcadp_config", {})
             if isinstance(tcadp_parser, dict) and tcadp_parser:
                 self.secret_id = secret_id or tcadp_parser.get("secret_id")
                 self.secret_key = secret_key or tcadp_parser.get("secret_key")
                 self.region = region or tcadp_parser.get("region", "ap-guangzhou")
-                # Set table_result_type and markdown_image_response_type from config or parameters
+                # 这两个选项既可来自配置，也可由调用方显式覆盖。
                 self.table_result_type = table_result_type if table_result_type is not None else tcadp_parser.get("table_result_type", "1")
                 self.markdown_image_response_type = markdown_image_response_type if markdown_image_response_type is not None else tcadp_parser.get("markdown_image_response_type", "1")
 
             else:
                 self.logger.error("[TCADP] Please configure tcadp_config in service_conf.yaml first")
-                # If config file is empty, use provided parameters or defaults
+                # 配置为空时直接退回到构造参数。
                 self.secret_id = secret_id
                 self.secret_key = secret_key
                 self.region = region or "ap-guangzhou"
@@ -230,14 +231,14 @@ class TCADPParser(RAGFlowPdfParser):
 
         except ImportError:
             self.logger.info("[TCADP] Configuration module import failed")
-            # If config file is not available, use provided parameters or defaults
+            # 无法导入配置模块时同样退回到构造参数。
             self.secret_id = secret_id
             self.secret_key = secret_key
             self.region = region or "ap-guangzhou"
             self.table_result_type = table_result_type if table_result_type is not None else "1"
             self.markdown_image_response_type = markdown_image_response_type if markdown_image_response_type is not None else "1"
 
-        # Log final values
+        # 输出最终生效的配置，便于问题定位。
         self.logger.info(f"[TCADP] Final values - table_result_type: {self.table_result_type}, markdown_image_response_type: {self.markdown_image_response_type}")
 
         if not self.secret_id or not self.secret_key:
@@ -248,14 +249,14 @@ class TCADPParser(RAGFlowPdfParser):
         return (member.external_attr >> 16) & 0o170000 == 0o120000
 
     def check_installation(self) -> bool:
-        """Check if Tencent Cloud API configuration is correct"""
+        """检查腾讯云配置是否完整且至少能成功创建客户端。"""
         try:
-            # Check necessary configuration parameters
+            # 基础密钥缺失时无需继续探测。
             if not self.secret_id or not self.secret_key:
                 self.logger.error("[TCADP] Tencent Cloud API configuration incomplete")
                 return False
 
-            # Try to create client to verify configuration
+            # 能成功实例化客户端，说明最基本的 SDK 配置是可用的。
             TencentCloudAPIClient(self.secret_id, self.secret_key, self.region)
             self.logger.info("[TCADP] Tencent Cloud API configuration check passed")
             return True

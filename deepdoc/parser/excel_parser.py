@@ -27,12 +27,16 @@ ILLEGAL_CHARACTERS_RE = re.compile(r"[\000-\010]|[\013-\014]|[\016-\037]")
 
 
 class RAGFlowExcelParser:
+    """电子表格解析器，兼容 Excel 与 CSV，并支持图片提取。"""
+
     @staticmethod
     def _load_excel_to_workbook(file_like_object):
+        """把 Excel/CSV 输入统一加载成 openpyxl Workbook。"""
+
         if isinstance(file_like_object, bytes):
             file_like_object = BytesIO(file_like_object)
 
-        # Read first 4 bytes to determine file type
+        # 先根据文件头粗略判断是 Excel 还是 CSV/文本。
         file_like_object.seek(0)
         file_head = file_like_object.read(4)
         file_like_object.seek(0)
@@ -55,6 +59,7 @@ class RAGFlowExcelParser:
             try:
                 file_like_object.seek(0)
                 try:
+                    # pandas 对部分边缘 Excel 文件更宽容，可作为回退方案。
                     dfs = pd.read_excel(file_like_object, sheet_name=None)
                     return RAGFlowExcelParser._dataframe_to_workbook(dfs)
                 except Exception as ex:
@@ -67,6 +72,8 @@ class RAGFlowExcelParser:
 
     @staticmethod
     def _clean_dataframe(df: pd.DataFrame):
+        """清理 DataFrame 中 openpyxl 不接受的非法控制字符。"""
+
         def clean_string(s):
             if isinstance(s, str):
                 return ILLEGAL_CHARACTERS_RE.sub(" ", s)
@@ -76,6 +83,8 @@ class RAGFlowExcelParser:
 
     @staticmethod
     def _fill_worksheet_from_dataframe(ws, df: pd.DataFrame):
+        """把 DataFrame 内容逐单元格写回 Worksheet。"""
+
         for col_num, column_name in enumerate(df.columns, 1):
             ws.cell(row=1, column=col_num, value=column_name)
         for row_num, row in enumerate(df.values, 2):
@@ -84,6 +93,8 @@ class RAGFlowExcelParser:
 
     @staticmethod
     def _dataframe_to_workbook(df):
+        """把单个 DataFrame 或单 Sheet 结果封装为 Workbook。"""
+
         if isinstance(df, dict) and len(df) > 1:
             return RAGFlowExcelParser._dataframes_to_workbook(df)
 
@@ -96,6 +107,8 @@ class RAGFlowExcelParser:
 
     @staticmethod
     def _dataframes_to_workbook(dfs: dict):
+        """把多张 DataFrame 结果写成多工作表 Workbook。"""
+
         wb = Workbook()
         default_sheet = wb.active
         wb.remove(default_sheet)
@@ -109,9 +122,7 @@ class RAGFlowExcelParser:
     @staticmethod
     def _extract_images_from_worksheet(ws, sheetname=None):
         """
-        Extract images from a worksheet and enrich them with vision-based descriptions.
-
-        Returns: List[dict]
+        提取工作表中的图片，并保留图片所在单元格位置信息。
         """
         images = getattr(ws, "_images", [])
         if not images:
@@ -154,6 +165,8 @@ class RAGFlowExcelParser:
 
     @staticmethod
     def _get_actual_row_count(ws):
+        """估算工作表真实有效行数，避免被异常大的 `max_row` 拖慢。"""
+
         max_row = ws.max_row
         if not max_row:
             return 0
@@ -163,6 +176,7 @@ class RAGFlowExcelParser:
         max_col = min(ws.max_column or 1, 50)
 
         def row_has_data(row_idx):
+            # 只检查前若干列，用较小成本判断该行是否存在真实数据。
             for col_idx in range(1, max_col + 1):
                 cell = ws.cell(row=row_idx, column=col_idx)
                 if cell.value is not None and str(cell.value).strip():
@@ -175,6 +189,7 @@ class RAGFlowExcelParser:
         left, right = 1, max_row
         last_data_row = 1
 
+        # 用二分方式快速逼近最后一个有效数据区间。
         while left <= right:
             mid = (left + right) // 2
             found = False
@@ -196,12 +211,16 @@ class RAGFlowExcelParser:
 
     @staticmethod
     def _get_rows_limited(ws):
+        """只返回真实有效范围内的行，降低后续遍历成本。"""
+
         actual_rows = RAGFlowExcelParser._get_actual_row_count(ws)
         if actual_rows == 0:
             return []
         return list(ws.iter_rows(min_row=1, max_row=actual_rows))
 
     def html(self, fnm, chunk_rows=256):
+        """把工作表渲染成 HTML 表格片段。"""
+
         from html import escape
 
         file_like_object = BytesIO(fnm) if not isinstance(fnm, str) else fnm
@@ -247,6 +266,8 @@ class RAGFlowExcelParser:
         return tb_chunks
 
     def markdown(self, fnm):
+        """把表格转成 markdown 文本，适合轻量导出或调试。"""
+
         import pandas as pd
 
         file_like_object = BytesIO(fnm) if not isinstance(fnm, str) else fnm
@@ -261,6 +282,8 @@ class RAGFlowExcelParser:
         return df.to_markdown(index=False)
 
     def __call__(self, fnm):
+        """把每行数据整理成可检索文本。"""
+
         file_like_object = BytesIO(fnm) if not isinstance(fnm, str) else fnm
         wb = RAGFlowExcelParser._load_excel_to_workbook(file_like_object)
 
@@ -293,6 +316,8 @@ class RAGFlowExcelParser:
 
     @staticmethod
     def row_number(fnm, binary):
+        """统计表格总行数，用于预估解析规模。"""
+
         if fnm.split(".")[-1].lower().find("xls") >= 0:
             wb = RAGFlowExcelParser._load_excel_to_workbook(BytesIO(binary))
             total = 0

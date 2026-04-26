@@ -36,6 +36,7 @@ GOOD_CORP = json.load(open(os.path.join(current_file_path, "res/good_corp.json")
 CORP_TAG = json.load(open(os.path.join(current_file_path, "res/corp_tag.json"), "r",encoding="utf-8"))
 
 
+# 根据公司 ID 读取预先计算好的百科长度等统计值。
 def baike(cid, default_v=0):
     global GOODS
     try:
@@ -45,6 +46,7 @@ def baike(cid, default_v=0):
     return default_v
 
 
+# 公司名归一化：去除地域、法人后缀和常见噪声，便于匹配与聚类。
 def corpNorm(nm, add_region=True):
     global CORP_TKS
     if not nm or not isinstance(nm, str):
@@ -84,6 +86,7 @@ def corpNorm(nm, add_region=True):
     return nm.strip() + (("" if not reg else "(%s)" % reg[0]) if add_region else "")
 
 
+# 清理括号、标点等对企业名称匹配帮助不大的噪声字符。
 def rmNoise(n):
     n = re.sub(r"[\(（][^()（）]+[)）]", "", n)
     n = re.sub(r"[,. &（）()]+", "", n)
@@ -98,6 +101,7 @@ for c, v in CORP_TAG.items():
 CORP_TAG = {corpNorm(rmNoise(c), False): v for c, v in CORP_TAG.items()}
 
 
+# 判断企业是否落在优质企业集合中。
 def is_good(nm):
     global GOOD_CORP
     if nm.find("外派") >= 0:
@@ -113,6 +117,7 @@ def is_good(nm):
     return False
 
 
+# 为企业名匹配预定义标签。
 def corp_tag(nm):
     global CORP_TAG
     nm = rmNoise(nm)

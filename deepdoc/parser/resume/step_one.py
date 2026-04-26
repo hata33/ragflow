@@ -87,6 +87,7 @@ FIELDS = [
 "work_start_time BIGINT"
 ]
 
+# `step_one` 负责把原始简历 JSON 展开成统一字段集合。
 def refactor(df):
     """
     从 DataFrame 中解析 JSON 格式的简历内容并重构为结构化字段。

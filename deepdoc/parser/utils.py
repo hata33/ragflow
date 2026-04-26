@@ -14,6 +14,8 @@
 #  limitations under the License.
 #
 
+"""解析器共用的小工具函数。"""
+
 from io import BytesIO
 
 from pypdf import PdfReader as pdf2_read
@@ -22,6 +24,8 @@ from rag.nlp import find_codec
 
 
 def get_text(fnm: str, binary=None) -> str:
+    """读取文本文件内容，兼容文件路径和二进制输入两种形式。"""
+
     txt = ""
     if binary is not None:
         encoding = find_codec(binary)
@@ -37,11 +41,18 @@ def get_text(fnm: str, binary=None) -> str:
 
 
 def extract_pdf_outlines(source):
+    """提取 PDF 目录书签。
+
+    返回值中的每一项格式为 `(标题, 层级, 页码)`，页码从 1 开始。
+    若 PDF 没有目录或解析失败，则返回空列表。
+    """
+
     try:
         with pdf2_read(source if isinstance(source, str) else BytesIO(source)) as pdf:
             outlines = []
 
             def dfs(nodes, depth):
+                # pypdf 的 outline 结构可能是嵌套列表，这里用 DFS 展平。
                 for node in nodes:
                     if isinstance(node, list):
                         dfs(node, depth + 1)

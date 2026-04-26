@@ -27,7 +27,7 @@ from rag.prompts.generator import vision_llm_figure_describe_prompt, vision_llm_
 from rag.nlp import append_context2table_image4pdf
 from rag.utils.lazy_image import ensure_pil_image, open_image_for_processing, is_image_like
 
-# need to delete before pr
+# 兼容只提供图片和描述、但没有版面位置信息的图像数据结构。
 def vision_figure_parser_figure_data_wrapper(figures_data_without_positions):
     if not figures_data_without_positions:
         return []
@@ -44,7 +44,10 @@ def vision_figure_parser_figure_data_wrapper(figures_data_without_positions):
         )
     return res
 
+
 def vision_figure_parser_docx_wrapper(sections, tbls, callback=None,**kwargs):
+    """为 DOCX 中的图片补充视觉模型描述，并追加到表格/图片结果中。"""
+
     if not sections:
         return tbls
     try:
@@ -63,7 +66,10 @@ def vision_figure_parser_docx_wrapper(sections, tbls, callback=None,**kwargs):
             callback(0.8, f"Visual model error: {e}. Skipping figure parsing enhancement.")
     return tbls
 
+
 def vision_figure_parser_figure_xlsx_wrapper(images,callback=None, **kwargs):
+    """为 Excel 中提取出的图片调用视觉模型，生成增强描述。"""
+
     tbls = []
     if not images:
         return []
@@ -90,7 +96,10 @@ def vision_figure_parser_figure_xlsx_wrapper(images,callback=None, **kwargs):
             callback(0.25, f"Excel visual model error: {e}. Skipping vision enhancement.")
     return tbls
 
+
 def vision_figure_parser_pdf_wrapper(tbls, callback=None, **kwargs):
+    """为 PDF 中的图片块补充视觉描述，并可拼接上下文文本。"""
+
     if not tbls:
         return []
     sections = kwargs.get("sections")
@@ -133,6 +142,8 @@ def vision_figure_parser_pdf_wrapper(tbls, callback=None, **kwargs):
 
 
 def vision_figure_parser_docx_wrapper_naive(chunks, idx_lst, callback=None, **kwargs):
+    """对文档块中的图片执行就地视觉增强，直接回写到原 chunk。"""
+
     if not chunks:
         return []
     try:
@@ -144,6 +155,7 @@ def vision_figure_parser_docx_wrapper_naive(chunks, idx_lst, callback=None, **kw
     if vision_model:
         @timeout(30, 3)
         def worker(idx, ck):
+            # 统一把 LazyImage/bytes/PIL Image 打开成可送入视觉模型的图片对象。
             img, close_after = open_image_for_processing(ck.get("image"), allow_bytes=True)
             if not isinstance(img, Image.Image):
                 return idx, ""
@@ -151,7 +163,7 @@ def vision_figure_parser_docx_wrapper_naive(chunks, idx_lst, callback=None, **kw
             context_below = ck.get("context_below", "")
             if context_above or context_below:
                 prompt = vision_llm_figure_describe_prompt_with_context(
-                    # context_above + caption if any
+                    # 上文里顺带拼上已抽出的 caption，帮助模型更准确理解图片。
                     context_above=ck.get("context_above") + ck.get("text", ""),
                     context_below=ck.get("context_below"),
                 )
@@ -189,7 +201,14 @@ def vision_figure_parser_docx_wrapper_naive(chunks, idx_lst, callback=None, **kw
     
 shared_executor = ThreadPoolExecutor(max_workers=10)    
 
+
 class VisionFigureParser:
+    """批量图片描述增强器。
+
+    输入既兼容“只有图片与描述”的形式，也兼容“图片+描述+版面位置”的
+    形式；输出时会尽量保持原来的数据结构不变。
+    """
+
     def __init__(self, vision_model, figures_data, *args, **kwargs):
         self.vision_model = vision_model
         self.figure_contexts = kwargs.get("figure_contexts") or []
@@ -199,12 +218,15 @@ class VisionFigureParser:
         assert not self.positions or (len(self.figures) == len(self.positions))
 
     def _extract_figures_info(self, figures_data):
+        """把不同形态的输入统一展开为 figures/descriptions/positions 三组数据。"""
+
         self.figures = []
         self.descriptions = []
         self.positions = []
 
         for item in figures_data:
-            # position
+            # 形如 `((image, [desc]), [(page, x0, x1, top, bottom)])` 的输入，
+            # 说明已经带有版面位置信息，需要单独保留。
             if len(item) == 2 and isinstance(item[0], tuple) and len(item[0]) == 2 and isinstance(item[1], list) and isinstance(item[1][0], tuple) and len(item[1][0]) == 5:
                 img_desc = item[0]
                 img = ensure_pil_image(img_desc[0])
@@ -215,6 +237,7 @@ class VisionFigureParser:
                 self.descriptions.append(img_desc[1])
                 self.positions.append(item[1])
             else:
+                # 否则按“(image, [desc])”的简化形式处理。
                 img = ensure_pil_image(item[0])
                 if img is None:
                     continue
@@ -223,6 +246,8 @@ class VisionFigureParser:
                 self.descriptions.append(item[1])
 
     def _assemble(self):
+        """把增强后的描述重新拼回与输入兼容的数据结构。"""
+
         self.assembled = []
         self.has_positions = len(self.positions) != 0
         for i in range(len(self.figures)):
@@ -240,10 +265,13 @@ class VisionFigureParser:
         return self.assembled
 
     def __call__(self, **kwargs):
+        """并发调用视觉模型，为每张图片生成或补充描述。"""
+
         callback = kwargs.get("callback", lambda prog, msg: None)
 
         @timeout(30, 3)
         def process(figure_idx, figure_binary):
+            # 如有可用上下文，则构造带上下文的提示词提升描述质量。
             context_above = ""
             context_below = ""
             if figure_idx < len(self.figure_contexts):

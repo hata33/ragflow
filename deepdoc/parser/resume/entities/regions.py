@@ -758,9 +758,12 @@ TBL = {
     "7084": {"name": "天门市", "parent": "18"},
 }
 
+"""地区编码与地区名称映射表。"""
+
 NM_SET = set([v["name"] for _, v in TBL.items()])
 
 
+# 递归返回当前地区及其父级地区名称链。
 def get_names(id):
     if not id or str(id).lower() == "none":
         return []
@@ -779,6 +782,7 @@ def get_names(id):
 
 
 
+# 判断给定名称是否能映射到地区词典中的某个地区。
 def isName(nm):
     if nm in NM_SET:
         return True

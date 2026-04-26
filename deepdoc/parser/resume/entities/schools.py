@@ -14,6 +14,8 @@
 #  limitations under the License.
 #
 
+"""学校名称、别名、排名与优质学校判断工具。"""
+
 import os
 import json
 import re
@@ -30,6 +32,8 @@ GOOD_SCH = set([re.sub(r"[,. &（）()]+", "", c) for c in GOOD_SCH])
 
 
 def loadRank(fnm):
+    """把外部学校排名文件加载到学校表中。"""
+
     global TBL
     TBL["rank"] = 1000000
     with open(fnm, "r", encoding="utf-8") as f:
@@ -50,6 +54,8 @@ loadRank(os.path.join(current_file_path, "res/school.rank.csv"))
 
 
 def split(txt):
+    """按空白切分学校名称，同时尽量保留连续英文词组。"""
+
     tks = []
     for t in re.sub(r"[ \t]+", " ", txt).split():
         if (
@@ -65,6 +71,8 @@ def split(txt):
 
 
 def select(nm):
+    """根据学校中文名、英文名或别名匹配学校记录。"""
+
     global TBL
     if not nm:
         return
@@ -85,6 +93,8 @@ def select(nm):
 
 
 def is_good(nm):
+    """判断学校是否属于优质院校集合。"""
+
     global GOOD_SCH
     nm = re.sub(r"[(（][^()（）]+[)）]", "", nm.lower())
     nm = re.sub(r"[''`‘’“”,. &（）();；]+", "", nm)

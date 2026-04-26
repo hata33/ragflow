@@ -21,7 +21,10 @@ import chardet
 from bs4 import BeautifulSoup, NavigableString, Tag, Comment
 import html
 
+
 def get_encoding(file):
+    """探测本地 HTML 文件编码。"""
+
     with open(file,'rb') as f:
         tmp = chardet.detect(f.read())
         return tmp['encoding']
@@ -37,7 +40,11 @@ TITLE_TAGS = {"h1": "#", "h2": "##", "h3": "###", "h4": "####", "h5": "#####", "
 
 
 class RAGFlowHtmlParser:
+    """HTML 解析器，清洗标签后按块提取正文和表格。"""
+
     def __call__(self, fnm, binary=None, chunk_token_num=512):
+        """读取 HTML 文本，并进入统一解析流程。"""
+
         if binary:
             encoding = find_codec(binary)
             txt = binary.decode(encoding, errors="ignore")
@@ -48,23 +55,22 @@ class RAGFlowHtmlParser:
 
     @classmethod
     def parser_txt(cls, txt, chunk_token_num):
+        """清洗 HTML，提取块级内容，并按 token 数切分。"""
+
         if not isinstance(txt, str):
             raise TypeError("txt type should be string!")
 
         temp_sections = []
         soup = BeautifulSoup(txt, "html5lib")
-        # delete <style> tag
+        # 删除样式、脚本和注释，减少无意义噪声。
         for style_tag in soup.find_all(["style", "script"]):
             style_tag.decompose()
-        # delete <script> tag in <div>
         for div_tag in soup.find_all("div"):
             for script_tag in div_tag.find_all("script"):
                 script_tag.decompose()
-        # delete inline style
         for tag in soup.find_all(True):
             if 'style' in tag.attrs:
                 del tag.attrs['style']
-        # delete HTML comment
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
             comment.extract()
 
@@ -77,6 +83,8 @@ class RAGFlowHtmlParser:
 
     @classmethod
     def split_table(cls, html_table, chunk_token_num=512):
+        """把过大的 HTML 表格按行拆成多个较小表格片段。"""
+
         soup = BeautifulSoup(html_table, "html.parser")
         rows = soup.find_all("tr")
         tables = []
@@ -105,6 +113,8 @@ class RAGFlowHtmlParser:
 
     @classmethod
     def read_text_recursively(cls, element, parser_result, chunk_token_num=512, parent_name=None, block_id=None):
+        """递归遍历 DOM，把正文块和表格块整理成统一结构。"""
+
         if isinstance(element, NavigableString):
             content = element.strip()
 
@@ -130,6 +140,7 @@ class RAGFlowHtmlParser:
         elif isinstance(element, Tag):
 
             if str.lower(element.name) == "table":
+                # 表格单独保留 HTML，方便后续走专门的表格处理逻辑。
                 table_info_list = []
                 table_id = str(uuid.uuid1())
                 table_list = [html.unescape(str(element))]
@@ -139,6 +150,7 @@ class RAGFlowHtmlParser:
                 return table_info_list
             else:
                 if str.lower(element.name) in BLOCK_TAGS:
+                    # 遇到块级标签时重置 block_id，用于后续合并同一块正文。
                     block_id = str(uuid.uuid1())
                 for child in element.children:
                     child_info = cls.read_text_recursively(child, parser_result, chunk_token_num, element.name,
@@ -148,6 +160,8 @@ class RAGFlowHtmlParser:
 
     @classmethod
     def merge_block_text(cls, parser_result):
+        """把同一块级容器下的零散文本合并成连续正文。"""
+
         block_content = []
         current_content = ""
         table_info_list = []
@@ -159,6 +173,7 @@ class RAGFlowHtmlParser:
             block_id = item.get("metadata", {}).get("block_id")
             if block_id:
                 if title_flag:
+                    # 标题补上 markdown 风格前缀，便于后续保留层级信息。
                     content = f"{TITLE_TAGS[tag_name]} {content}"
                 if last_block_id != block_id:
                     if last_block_id is not None:
@@ -178,6 +193,8 @@ class RAGFlowHtmlParser:
 
     @classmethod
     def chunk_block(cls, block_txt_list, chunk_token_num=512):
+        """按 token 数把块级正文进一步合并或拆分。"""
+
         chunks = []
         current_block = ""
         current_token_count = 0

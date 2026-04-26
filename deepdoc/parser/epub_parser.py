@@ -33,10 +33,15 @@ logger = logging.getLogger(__name__)
 
 
 class RAGFlowEpubParser:
-    """Parse EPUB files by extracting XHTML content in spine (reading) order
-    and delegating to RAGFlowHtmlParser for chunking."""
+    """EPUB 解析器。
+
+    它会按照 spine 指定的阅读顺序提取 XHTML 内容，再复用
+    `RAGFlowHtmlParser` 完成 HTML 清洗和分块。
+    """
 
     def __call__(self, fnm, binary=None, chunk_token_num=512):
+        """读取 EPUB 压缩包，并按阅读顺序汇总正文 section。"""
+
         if binary is not None:
             if not binary:
                 logger.warning(
@@ -74,8 +79,9 @@ class RAGFlowEpubParser:
 
     @staticmethod
     def _get_spine_items(zf):
-        """Return content file paths in spine (reading) order."""
-        # 1. Find the OPF file path from META-INF/container.xml
+        """返回 spine 中定义的正文文件路径列表。"""
+
+        # 1. 先从 META-INF/container.xml 中找到 OPF 清单文件位置。
         try:
             container_xml = zf.read("META-INF/container.xml")
         except KeyError:
@@ -95,10 +101,10 @@ class RAGFlowEpubParser:
         if not opf_path:
             return RAGFlowEpubParser._fallback_xhtml_order(zf)
 
-        # Base directory of the OPF file (content paths are relative to it)
+        # OPF 内的 href 通常相对 OPF 所在目录，因此这里提前记录基路径。
         opf_dir = opf_path.rsplit("/", 1)[0] + "/" if "/" in opf_path else ""
 
-        # 2. Parse the OPF file
+        # 2. 解析 OPF，读取 manifest 与 spine。
         try:
             opf_xml = zf.read(opf_path)
         except KeyError:
@@ -110,7 +116,7 @@ class RAGFlowEpubParser:
             logger.warning("Failed to parse OPF file '%s'; falling back to XHTML order.", opf_path)
             return RAGFlowEpubParser._fallback_xhtml_order(zf)
 
-        # 3. Build id->href+mediatype map from <manifest>
+        # 3. 先建立 `id -> (href, media_type)` 映射，供后续 spine 查找。
         manifest = {}
         for item in opf_root.findall(f".//{{{_OPF_NS}}}item"):
             item_id = item.get("id", "")
@@ -119,7 +125,7 @@ class RAGFlowEpubParser:
             if item_id and href:
                 manifest[item_id] = (href, media_type)
 
-        # 4. Walk <spine> to get reading order
+        # 4. 再按 spine 顺序筛出真正参与阅读流的 XHTML 页面。
         spine_items = []
         for itemref in opf_root.findall(f".//{{{_OPF_NS}}}itemref"):
             idref = itemref.get("idref", "")
@@ -136,7 +142,8 @@ class RAGFlowEpubParser:
 
     @staticmethod
     def _fallback_xhtml_order(zf):
-        """Fallback: return all .xhtml/.html files sorted alphabetically."""
+        """兜底方案：按文件名字典序返回所有 HTML/XHTML 页面。"""
+
         return sorted(
             n
             for n in zf.namelist()

@@ -45,6 +45,8 @@ from deepdoc.parser.utils import extract_pdf_outlines
 
 
 class DoclingContentType(str, Enum):
+    """Docling 输出块的内容类型枚举。"""
+
     IMAGE = "image"
     TABLE = "table"
     TEXT = "text"
@@ -53,6 +55,8 @@ class DoclingContentType(str, Enum):
 
 @dataclass
 class _BBox:
+    """统一封装版面框坐标，便于不同输出结构复用。"""
+
     page_no: int  
     x0: float
     y0: float
@@ -61,6 +65,8 @@ class _BBox:
 
 
 def _extract_bbox_from_prov(item, prov_attr: str = "prov") -> Optional[_BBox]:
+    """从 Docling 的 prov 信息中抽取页码和 bbox。"""
+
     prov = getattr(item, prov_attr, None)
     if not prov:
         return None
@@ -79,6 +85,8 @@ def _extract_bbox_from_prov(item, prov_attr: str = "prov") -> Optional[_BBox]:
 
 
 class DoclingParser(RAGFlowPdfParser):
+    """Docling PDF 解析器，支持本地库和远端服务两种执行方式。"""
+
     def __init__(self, docling_server_url: str = "", request_timeout: int = 600):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.page_images: list[Image.Image] = []
@@ -89,6 +97,8 @@ class DoclingParser(RAGFlowPdfParser):
         self.request_timeout = request_timeout
 
     def _effective_server_url(self, docling_server_url: Optional[str] = None) -> str:
+        """按显式参数、实例配置、环境变量的优先级解析服务地址。"""
+
         return (docling_server_url or self.docling_server_url or "").rstrip("/") or (
             os.environ.get("DOCLING_SERVER_URL", "").rstrip("/")
         )
@@ -106,6 +116,8 @@ class DoclingParser(RAGFlowPdfParser):
                 return False
 
     def check_installation(self, docling_server_url: Optional[str] = None) -> bool:
+        """检查 Docling 服务端或本地依赖是否可用。"""
+
         server_url = self._effective_server_url(docling_server_url)
         if server_url:
             for path in ("/openapi.json", "/docs", "/v1/convert/source"):
@@ -125,6 +137,8 @@ class DoclingParser(RAGFlowPdfParser):
             return False
 
     def __images__(self, fnm, zoomin: int = 1, page_from=0, page_to=600, callback=None):
+        """预先渲染 PDF 页面图片，供后续裁剪和坐标可视化使用。"""
+
         self.page_from = page_from
         self.page_to = page_to
         bytes_io = None
@@ -144,6 +158,8 @@ class DoclingParser(RAGFlowPdfParser):
                 bytes_io.close()
 
     def _make_line_tag(self,bbox: _BBox) -> str:
+        """把 Docling bbox 转成 RAGFlow 内联位置标签。"""
+
         if bbox is None:
             return ""
         x0,x1, top, bott = bbox.x0, bbox.x1, bbox.y0, bbox.y1
@@ -156,6 +172,8 @@ class DoclingParser(RAGFlowPdfParser):
 
     @staticmethod
     def extract_positions(txt: str) -> list[tuple[list[int], float, float, float, float]]:
+        """解析 `_make_line_tag` 生成的位置标签。"""
+
         poss = []
         for tag in re.findall(r"@@[0-9-]+\t[0-9.\t]+##", txt):
             pn, left, right, top, bottom = tag.strip("#").strip("@").split("\t")
@@ -164,6 +182,8 @@ class DoclingParser(RAGFlowPdfParser):
         return poss
 
     def crop(self, text: str, ZM: int = 1, need_position: bool = False):
+        """根据位置标签裁剪图片区域，并支持跨页拼接。"""
+
         imgs = []
         poss = self.extract_positions(text)
         if not poss:
@@ -216,6 +236,8 @@ class DoclingParser(RAGFlowPdfParser):
         return (pic, positions) if need_position else pic
 
     def _iter_doc_items(self, doc) -> Iterable[tuple[str, Any, Optional[_BBox]]]:
+        """遍历 Docling 文档对象中的正文和公式块。"""
+
         for t in getattr(doc, "texts", []):
             parent = getattr(t, "parent", "")
             ref = getattr(parent, "cref", "")
@@ -232,6 +254,8 @@ class DoclingParser(RAGFlowPdfParser):
                 yield (DoclingContentType.EQUATION.value, text, bbox)
 
     def _transfer_to_sections(self, doc, parse_method: str) -> list[tuple[str, ...]]:
+        """把 Docling 输出转换成 RAGFlow 所需的 section 元组结构。"""
+
         sections: list[tuple[str, ...]] = []
         for typ, payload, bbox in self._iter_doc_items(doc):
             if typ == DoclingContentType.TEXT.value:

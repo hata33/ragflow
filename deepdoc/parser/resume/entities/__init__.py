@@ -13,3 +13,5 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+
+"""简历实体词典与辅助映射集合。"""

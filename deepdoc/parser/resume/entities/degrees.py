@@ -14,6 +14,8 @@
 #  limitations under the License.
 #
 
+"""学历编码与名称之间的映射表。"""
+
 TBL = {
     "94": "EMBA",
     "6": "MBA",
@@ -35,10 +37,14 @@ TBL_ = {v: k for k, v in TBL.items()}
 
 
 def get_name(id):
+    """根据学历 ID 返回学历名称。"""
+
     return TBL.get(str(id), "")
 
 
 def get_id(nm):
+    """根据学历名称返回标准学历 ID。"""
+
     if not nm:
         return ""
     return TBL_.get(nm.upper().strip(), "")

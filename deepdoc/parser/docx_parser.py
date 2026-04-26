@@ -28,8 +28,13 @@ from docx.image.exceptions import (
 )
 from rag.utils.lazy_image import LazyImage
 
+
 class RAGFlowDocxParser:
+    """Word 解析器，负责提取段落、表格以及内嵌图片。"""
+
     def get_picture(self, document, paragraph):
+        """提取段落中的嵌入图片，并延迟包装成 `LazyImage`。"""
+
         imgs = paragraph._element.xpath(".//pic:pic")
         if not imgs:
             return None
@@ -47,6 +52,7 @@ class RAGFlowDocxParser:
                 continue
 
             try:
+                # 优先通过 python-docx 暴露的标准 image 接口取图。
                 image = related_part.image
                 if image is not None:
                     image_blob = image.blob
@@ -61,6 +67,7 @@ class RAGFlowDocxParser:
                 logging.warning(f"Unexpected error getting image, attempting blob fallback: {e}")
 
             if image_blob is None:
+                # 某些损坏文档下标准接口会失败，这里退化为直接拿底层 blob。
                 image_blob = getattr(related_part, "blob", None)
             if image_blob:
                 image_blobs.append(image_blob)
@@ -70,14 +77,18 @@ class RAGFlowDocxParser:
 
 
     def __extract_table_content(self, tb):
+        """将 Word 表格转成 DataFrame 后复用统一表格整理逻辑。"""
+
         df = []
         for row in tb.rows:
             df.append([c.text for c in row.cells])
         return self.__compose_table_content(pd.DataFrame(df))
 
     def __compose_table_content(self, df):
+        """根据单元格内容类型推断表头，并把表格转成可检索文本。"""
 
         def blockType(b):
+            # 通过规则快速判断单元格更像日期、数值、编号还是长文本。
             pattern = [
                 ("^(20|19)[0-9]{2}[年/-][0-9]{1,2}[月/-][0-9]{1,2}日*$", "Dt"),
                 (r"^(20|19)[0-9]{2}年$", "Dt"),
@@ -114,7 +125,8 @@ class RAGFlowDocxParser:
         max_type = max(max_type.items(), key=lambda x: x[1])[0]
 
         colnm = len(df.iloc[0, :])
-        hdrows = [0]  # header is not necessarily appear in the first line
+        # 表头不一定只占第一行，这里允许继续向下吸收“表头风格”的行。
+        hdrows = [0]
         if max_type == "Nu":
             for r in range(1, len(df)):
                 tys = Counter([blockType(str(df.iloc[r, j]))
@@ -159,26 +171,28 @@ class RAGFlowDocxParser:
         return ["\n".join(lines)]
 
     def __call__(self, fnm, from_page=0, to_page=100000000):
+        """提取段落与表格内容，并依据分页符近似统计页范围。"""
+
         self.doc = Document(fnm) if isinstance(
             fnm, str) else Document(BytesIO(fnm))
-        pn = 0 # parsed page
-        secs = [] # parsed contents
+        pn = 0  # 当前已解析到的近似页码。
+        secs = []  # 收集段落文本与样式名。
         for p in self.doc.paragraphs:
             if pn > to_page:
                 break
 
-            runs_within_single_paragraph = [] # save runs within the range of pages
+            runs_within_single_paragraph = []  # 只保留当前页范围内的 run 内容。
             for run in p.runs:
                 if pn > to_page:
                     break
                 if from_page <= pn < to_page and p.text.strip():
-                    runs_within_single_paragraph.append(run.text) # append run.text first
+                    runs_within_single_paragraph.append(run.text)
 
-                # wrap page break checker into a static method
+                # Word 文档没有稳定页码概念，这里只能通过渲染分页符近似累计。
                 if 'lastRenderedPageBreak' in run._element.xml:
                     pn += 1
 
-            secs.append(("".join(runs_within_single_paragraph), p.style.name if hasattr(p.style, 'name') else '')) # then concat run.text as part of the paragraph
+            secs.append(("".join(runs_within_single_paragraph), p.style.name if hasattr(p.style, 'name') else ''))
 
         tbls = [self.__extract_table_content(tb) for tb in self.doc.tables]
         return secs, tbls

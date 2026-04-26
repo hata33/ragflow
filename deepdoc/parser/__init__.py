@@ -14,6 +14,12 @@
 #  limitations under the License.
 #
 
+"""deepdoc.parser 对外暴露的解析器入口。
+
+这里统一导出各类文档解析器，方便上层按文件类型直接选择对应实现，
+而不需要关心具体模块路径。
+"""
+
 from .docx_parser import RAGFlowDocxParser as DocxParser
 from .epub_parser import RAGFlowEpubParser as EpubParser
 from .excel_parser import RAGFlowExcelParser as ExcelParser
@@ -26,6 +32,7 @@ from .pdf_parser import RAGFlowPdfParser as PdfParser
 from .ppt_parser import RAGFlowPptParser as PptParser
 from .txt_parser import RAGFlowTxtParser as TxtParser
 
+# 控制 `from deepdoc.parser import *` 时允许导出的公共解析器名称。
 __all__ = [
     "PdfParser",
     "PlainParser",

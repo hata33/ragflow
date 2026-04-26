@@ -75,6 +75,7 @@ ENV = None
 PY = Pinyin()
 
 
+# 去除 HTML 噪声，供教育、工作、项目等文本字段预处理复用。
 def rmHtmlTag(line):
     """
     移除字符串中的 HTML 标签。
@@ -107,6 +108,7 @@ def highest_degree(dg):
     return sorted([(d, m.get(d, -1)) for d in dg], key=lambda x: x[1] * -1)[0][0]
 
 
+# 教育经历加工：学校、专业、学历、学校标签和时间特征都在这里聚合。
 def forEdu(cv):
     if not cv.get("education_obj"):
         cv["integerity_flt"] *= 0.8

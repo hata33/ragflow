@@ -58,10 +58,14 @@ _MARKDOWN_IMAGE_PATTERN = re.compile(
 
 
 def _remove_images_from_markdown(markdown: str) -> str:
+    """移除 markdown 中的图片标签，避免图片占位干扰正文切分。"""
+
     return _MARKDOWN_IMAGE_PATTERN.sub("", markdown)
 
 
 def _normalize_bbox(bbox: list[Any] | tuple[Any, ...]) -> tuple[float, float, float, float]:
+    """把 bbox 归一化为 `(left, top, right, bottom)` 且保证方向正确。"""
+
     if len(bbox) < 4:
         return 0.0, 0.0, 0.0, 0.0
 
@@ -75,7 +79,7 @@ def _normalize_bbox(bbox: list[Any] | tuple[Any, ...]) -> tuple[float, float, fl
 
 @dataclass
 class PaddleOCRVLConfig:
-    """Configuration for PaddleOCR-VL algorithm."""
+    """PaddleOCR-VL 算法相关配置。"""
 
     use_doc_orientation_classify: Optional[bool] = False
     use_doc_unwarping: Optional[bool] = False
@@ -106,7 +110,7 @@ class PaddleOCRVLConfig:
 
 @dataclass
 class PaddleOCRConfig:
-    """Main configuration for PaddleOCR parser."""
+    """PaddleOCR 解析器总配置。"""
 
     api_url: str = ""
     access_token: Optional[str] = None
@@ -120,18 +124,18 @@ class PaddleOCRConfig:
 
     @classmethod
     def from_dict(cls, config: Optional[dict[str, Any]]) -> "PaddleOCRConfig":
-        """Create configuration from dictionary."""
+        """从字典构造配置对象，并补齐算法默认参数。"""
         if not config:
             return cls()
 
         cfg = config.copy()
         algorithm = cfg.get("algorithm", "PaddleOCR-VL")
 
-        # Validate algorithm
+        # 当前只支持 `PaddleOCR-VL`，其它算法提前拦截。
         if algorithm not in ("PaddleOCR-VL"):
             raise ValueError(f"Unsupported algorithm: {algorithm}")
 
-        # Extract algorithm-specific configuration
+        # 先加载算法默认配置，再用用户传入值覆盖。
         algorithm_config: dict[str, Any] = {}
         if algorithm == "PaddleOCR-VL":
             algorithm_config = asdict(PaddleOCRVLConfig())
@@ -139,10 +143,10 @@ class PaddleOCRConfig:
         if isinstance(algorithm_config_user, dict):
             algorithm_config.update({k: v for k, v in algorithm_config_user.items() if v is not None})
 
-        # Remove processed keys
+        # 已消费字段从公共配置里移除，避免重复写入构造参数。
         cfg.pop("algorithm_config", None)
 
-        # Prepare initialization arguments
+        # 仅保留 dataclass 字段，忽略额外噪声配置项。
         field_names = {field.name for field in fields(cls)}
         init_kwargs: dict[str, Any] = {}
 
@@ -156,12 +160,12 @@ class PaddleOCRConfig:
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> "PaddleOCRConfig":
-        """Create configuration from keyword arguments."""
+        """从关键字参数构造配置对象。"""
         return cls.from_dict(kwargs)
 
 
 class PaddleOCRParser(RAGFlowPdfParser):
-    """Parser for PDF documents using PaddleOCR API."""
+    """基于 PaddleOCR API 的 PDF 解析器。"""
 
     _ZOOMIN = 2
 
@@ -209,7 +213,7 @@ class PaddleOCRParser(RAGFlowPdfParser):
         *,
         request_timeout: int = 600,
     ):
-        """Initialize PaddleOCR parser."""
+        """初始化 PaddleOCR 解析器。"""
         super().__init__()
 
         self.outlines = []
@@ -219,20 +223,20 @@ class PaddleOCRParser(RAGFlowPdfParser):
         self.request_timeout = request_timeout
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        # Force PDF file type
+        # 当前实现固定处理 PDF，因此 file_type 写死为 0。
         self.file_type = 0
 
-        # Initialize page images for cropping
+        # 预留页面位图缓存，供 crop 等功能使用。
         self.page_images: list[Image.Image] = []
         self.page_from = 0
 
     # Public methods
     def check_installation(self) -> tuple[bool, str]:
-        """Check if the parser is properly installed and configured."""
+        """检查 API 地址等必要配置是否齐备。"""
         if not self.api_url:
             return False, "[PaddleOCR] API URL not configured"
 
-        # TODO [@Bobholamovic]: Check URL availability and token validity
+        # TODO [@Bobholamovic]: 后续可补充 URL 可达性和 token 有效性探测。
 
         return True, ""
 
@@ -254,9 +258,9 @@ class PaddleOCRParser(RAGFlowPdfParser):
         algorithm_config: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> ParseResult:
-        """Parse PDF document using PaddleOCR API."""
+        """调用 PaddleOCR API 解析 PDF 文档。"""
         self.outlines = extract_pdf_outlines(binary if binary is not None else filepath)
-        # Create configuration - pass all kwargs to capture VL config parameters
+        # 把顶层参数与额外 kwargs 一起整理成统一配置，兼容 VL 细粒度选项。
         config_dict = {
             "api_url": api_url if api_url is not None else self.api_url,
             "access_token": access_token if access_token is not None else self.access_token,

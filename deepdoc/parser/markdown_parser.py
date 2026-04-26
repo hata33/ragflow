@@ -21,14 +21,19 @@ from markdown import markdown
 
 
 class RAGFlowMarkdownParser:
+    """Markdown 解析器，负责分离表格并保留其余正文。"""
+
     def __init__(self, chunk_token_num=128):
         self.chunk_token_num = int(chunk_token_num)
 
     def extract_tables_and_remainder(self, markdown_text, separate_tables=True):
+        """提取 Markdown/HTML 表格，并返回剩余正文。"""
+
         tables = []
         working_text = markdown_text
 
         def replace_tables_with_rendered_html(pattern, table_list, render=True):
+            # 把命中的表格从正文里剥离出来，避免它们干扰普通文本切分。
             new_text = ""
             last_end = 0
             for match in pattern.finditer(working_text):
@@ -46,7 +51,7 @@ class RAGFlowMarkdownParser:
             return new_text
 
         if "|" in markdown_text:  # for optimize performance
-            # Standard Markdown table
+            # 标准 Markdown 表格。
             border_table_pattern = re.compile(
                 r"""
                 (?:\n|^)
@@ -58,7 +63,7 @@ class RAGFlowMarkdownParser:
             )
             working_text = replace_tables_with_rendered_html(border_table_pattern, tables, render=separate_tables)
 
-            # Borderless Markdown table
+            # 无首尾竖线的表格写法。
             no_border_table_pattern = re.compile(
                 r"""
                 (?:\n|^)
@@ -70,7 +75,7 @@ class RAGFlowMarkdownParser:
             )
             working_text = replace_tables_with_rendered_html(no_border_table_pattern, tables, render=separate_tables)
 
-        # Replace any TAGS e.g. <table ...> to <table>
+        # 把带属性的表格标签统一归一化，方便后面用正则直接匹配 HTML 表格。
         TAGS = ["table", "td", "tr", "th", "tbody", "thead", "div"]
         table_with_attributes_pattern = re.compile(rf"<(?:{'|'.join(TAGS)})[^>]*>", re.IGNORECASE)
 
@@ -81,7 +86,7 @@ class RAGFlowMarkdownParser:
         working_text = re.sub(table_with_attributes_pattern, replace_tag, working_text)
 
         if "<table>" in working_text.lower():  # for optimize performance
-            # HTML table extraction - handle possible html/body wrapper tags
+            # 兼容三类情况：完整 html/body 包裹、仅 body 包裹、纯 table 片段。
             html_table_pattern = re.compile(
                 r"""
             (?:\n|^)
@@ -123,17 +128,21 @@ class RAGFlowMarkdownParser:
 
 
 class MarkdownElementExtractor:
+    """把 Markdown 文本拆成标题、代码块、列表、引用和普通段落等元素。"""
+
     def __init__(self, markdown_content):
         self.markdown_content = markdown_content
         self.lines = markdown_content.split("\n")
 
     def get_delimiters(self, delimiters):
+        """提取反引号包裹的多字符分隔符，并转成正则。"""
+
         toks = re.findall(r"`([^`]+)`", delimiters)
         toks = sorted(set(toks), key=lambda x: -len(x))
         return "|".join(re.escape(t) for t in toks if t)
 
     def extract_elements(self, delimiter=None, include_meta=False):
-        """Extract individual elements (headers, code blocks, lists, etc.)"""
+        """提取独立 Markdown 元素，可选返回行号等元信息。"""
         sections = []
 
         i = 0
@@ -174,27 +183,27 @@ class MarkdownElementExtractor:
             line = self.lines[i]
 
             if re.match(r"^#{1,6}\s+.*$", line):
-                # header
+                # 标题块。
                 element = self._extract_header(i)
                 sections.append(element if include_meta else element["content"])
                 i = element["end_line"] + 1
             elif line.strip().startswith("```"):
-                # code block
+                # 代码块。
                 element = self._extract_code_block(i)
                 sections.append(element if include_meta else element["content"])
                 i = element["end_line"] + 1
             elif re.match(r"^\s*[-*+]\s+.*$", line) or re.match(r"^\s*\d+\.\s+.*$", line):
-                # list block
+                # 列表块。
                 element = self._extract_list_block(i)
                 sections.append(element if include_meta else element["content"])
                 i = element["end_line"] + 1
             elif line.strip().startswith(">"):
-                # blockquote
+                # 引用块。
                 element = self._extract_blockquote(i)
                 sections.append(element if include_meta else element["content"])
                 i = element["end_line"] + 1
             elif line.strip():
-                # text block (paragraphs and inline elements until next block element)
+                # 普通文本块，一直延续到下一个明确的块级元素。
                 element = self._extract_text_block(i)
                 sections.append(element if include_meta else element["content"])
                 i = element["end_line"] + 1
@@ -208,6 +217,8 @@ class MarkdownElementExtractor:
         return sections
 
     def _extract_header(self, start_pos):
+        """提取单行标题。"""
+
         return {
             "type": "header",
             "content": self.lines[start_pos],
@@ -216,10 +227,12 @@ class MarkdownElementExtractor:
         }
 
     def _extract_code_block(self, start_pos):
+        """提取围栏代码块。"""
+
         end_pos = start_pos
         content_lines = [self.lines[start_pos]]
 
-        # Find the end of the code block
+        # 向后查找到下一个围栏结束标记。
         for i in range(start_pos + 1, len(self.lines)):
             content_lines.append(self.lines[i])
             end_pos = i
@@ -234,13 +247,15 @@ class MarkdownElementExtractor:
         }
 
     def _extract_list_block(self, start_pos):
+        """提取连续列表块，包括缩进续行。"""
+
         end_pos = start_pos
         content_lines = []
 
         i = start_pos
         while i < len(self.lines):
             line = self.lines[i]
-            # check if this line is a list item or continuation of a list
+            # 允许列表项、空行、缩进子项以及缩进续写文本并入同一列表块。
             if (
                 re.match(r"^\s*[-*+]\s+.*$", line)
                 or re.match(r"^\s*\d+\.\s+.*$", line)
@@ -263,6 +278,8 @@ class MarkdownElementExtractor:
         }
 
     def _extract_blockquote(self, start_pos):
+        """提取连续引用块。"""
+
         end_pos = start_pos
         content_lines = []
 
@@ -284,18 +301,18 @@ class MarkdownElementExtractor:
         }
 
     def _extract_text_block(self, start_pos):
-        """Extract a text block (paragraphs, inline elements) until next block element"""
+        """提取普通段落，直到遇到下一个块级元素为止。"""
         end_pos = start_pos
         content_lines = [self.lines[start_pos]]
 
         i = start_pos + 1
         while i < len(self.lines):
             line = self.lines[i]
-            # stop if we encounter a block element
+            # 遇到新的块级元素就停止，避免把不同语义块混在一起。
             if re.match(r"^#{1,6}\s+.*$", line) or line.strip().startswith("```") or re.match(r"^\s*[-*+]\s+.*$", line) or re.match(r"^\s*\d+\.\s+.*$", line) or line.strip().startswith(">"):
                 break
             elif not line.strip():
-                # check if the next line is a block element
+                # 空行后如果立刻切换到其它块级元素，则把这里视为段落结束。
                 if i + 1 < len(self.lines) and (
                     re.match(r"^#{1,6}\s+.*$", self.lines[i + 1])
                     or self.lines[i + 1].strip().startswith("```")
