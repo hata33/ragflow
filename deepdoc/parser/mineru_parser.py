@@ -136,6 +136,14 @@ class MinerUParseOptions:
 
 
 class MinerUParser(RAGFlowPdfParser):
+    """对接远端 MinerU 服务的 PDF 解析适配器。
+
+    这里主要承担两类本地职责：
+    1. 准备 PDF 文件以及 MinerU 所需的请求参数。
+    2. 将 MinerU 返回的产物整理成 RAGFlow 需要的 section 结构，
+       同时保留后续预览、裁剪所需的位置信息。
+    """
+
     def __init__(self, mineru_path: str = "mineru", mineru_api: str = "", mineru_server_url: str = ""):
         self.mineru_api = mineru_api.rstrip("/")
         self.mineru_server_url = mineru_server_url.rstrip("/")
@@ -147,6 +155,14 @@ class MinerUParser(RAGFlowPdfParser):
         return (member.external_attr >> 16) & 0o170000 == 0o120000
 
     def _extract_zip_no_root(self, zip_path, extract_to, root_dir):
+        """解压 MinerU 返回的 ZIP，并按需去掉最外层目录。
+
+        MinerU 有时会把所有输出都打包在 `<pdf_name>/...` 目录下，而
+        RAGFlow 更希望直接在解压目录里读取 JSON 和图片资源，因此这里会
+        选择性剥离这一层路径。同时会校验每个压缩包成员，避免写出到
+        `extract_to` 目录之外。
+        """
+
         self.logger.info(f"[MinerU] Extract zip: zip_path={zip_path}, extract_to={extract_to}, root_hint={root_dir}")
         base_dir = Path(extract_to).resolve()
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
@@ -167,6 +183,8 @@ class MinerUParser(RAGFlowPdfParser):
                 if self._is_zipinfo_symlink(member):
                     raise RuntimeError(f"[MinerU] Symlink zip entry not supported: {member.filename}")
 
+                # 先统一成 POSIX 路径分隔符，避免后续安全校验在不同操作系统
+                # 上出现行为差异。
                 name = member.filename.replace("\\", "/")
                 if root_dir and name == root_dir:
                     self.logger.info("[MinerU] Ignore root folder...")
@@ -183,6 +201,7 @@ class MinerUParser(RAGFlowPdfParser):
                     raise RuntimeError(f"[MinerU] Unsafe zip path (traversal): {member.filename}")
 
                 rel_path = os.path.join(*parts) if parts else ""
+                # 解析最终写入路径，并确认它仍然位于目标解压目录之内，再落盘。
                 dest_path = (Path(extract_to) / rel_path).resolve(strict=False)
                 if dest_path != base_dir and base_dir not in dest_path.parents:
                     raise RuntimeError(f"[MinerU] Unsafe zip path (escape): {member.filename}")
@@ -204,6 +223,12 @@ class MinerUParser(RAGFlowPdfParser):
             return False
 
     def check_installation(self, backend: str = "pipeline", server_url: Optional[str] = None) -> tuple[bool, str]:
+        """在真正解析前，校验当前 MinerU 相关配置是否可用。
+
+        这里不会做完整能力探测，只负责确认 API 网关是否可访问；如果使用
+        `vlm-http-client` 后端，也会顺带检查模型服务地址是否看起来可连通。
+        """
+
         reason = ""
 
         valid_backends = ["pipeline", "vlm-http-client", "vlm-transformers", "vlm-vllm-engine", "vlm-mlx-engine", "vlm-vllm-async-engine", "vlm-lmdeploy-engine"]
@@ -251,6 +276,8 @@ class MinerUParser(RAGFlowPdfParser):
     def _run_mineru_api(
         self, input_path: Path, output_dir: Path, options: MinerUParseOptions, callback: Optional[Callable] = None
     ) -> Path:
+        """把 PDF 上传给 MinerU API，并将返回的 ZIP 结果落到本地。"""
+
         pdf_file_path = str(input_path)
 
         if not os.path.exists(pdf_file_path):
@@ -261,6 +288,7 @@ class MinerUParser(RAGFlowPdfParser):
         output_zip_path = os.path.join(str(output_dir), f"{Path(output_path).name}.zip")
 
         data = {
+            # MinerU 会按这个相对目录组织 ZIP 内部的输出结果。
             "output_dir": "./output",
             "lang_list": options.lang,
             "backend": options.backend,
@@ -292,6 +320,8 @@ class MinerUParser(RAGFlowPdfParser):
             if callback:
                 callback(0.20, f"[MinerU] invoke api: {self.mineru_api}/file_parse")
             with open(pdf_file_path, "rb") as pdf_file:
+                # MinerU 要求以 multipart 方式上传：PDF 放在 `files` 字段，
+                # 其余解析参数作为普通表单字段提交。
                 files = {"files": (pdf_file_name + ".pdf", pdf_file, "application/pdf")}
                 with requests.post(
                     url=f"{self.mineru_api}/file_parse",
@@ -310,6 +340,8 @@ class MinerUParser(RAGFlowPdfParser):
                             callback(0.30, f"[MinerU] zip file returned, saving to {output_zip_path}...")
 
                         with open(output_zip_path, "wb") as f:
+                            # 直接流式写盘，避免大 PDF 或大量页面图片时把整个 ZIP
+                            # 常驻在内存中。
                             response.raw.decode_content = True
                             shutil.copyfileobj(response.raw, f)
 
@@ -326,6 +358,12 @@ class MinerUParser(RAGFlowPdfParser):
         return Path(output_path)
 
     def __images__(self, fnm, zoomin: int = 1, page_from=0, page_to=600, callback=None):
+        """预先把 PDF 页面栅格化，供后续裁剪逻辑重复使用。
+
+        MinerU 返回的是归一化页坐标，后续预览和裁剪需要依赖页面位图把这些
+        坐标还原成真实像素位置，并生成拼接截图用于引用或调试。
+        """
+
         self.page_from = page_from
         self.page_to = page_to
         try:
@@ -339,6 +377,8 @@ class MinerUParser(RAGFlowPdfParser):
             self.logger.exception(e)
 
     def _line_tag(self, bx):
+        """把 MinerU 的块坐标编码成 RAGFlow 使用的行内位置标签。"""
+
         pn = [bx["page_idx"] + 1]
         positions = bx.get("bbox", (0, 0, 0, 0))
         x0, top, x1, bott = positions
@@ -350,6 +390,8 @@ class MinerUParser(RAGFlowPdfParser):
 
         if hasattr(self, "page_images") and self.page_images and len(self.page_images) > bx["page_idx"]:
             page_width, page_height = self.page_images[bx["page_idx"]].size
+            # MinerU 的 bbox 使用 0-1000 的归一化坐标，这里要换算回像素坐标，
+            # 这样现有的裁剪、高亮等工具就能沿用与内置 PDF 解析器一致的约定。
             x0 = (x0 / 1000.0) * page_width
             x1 = (x1 / 1000.0) * page_width
             top = (top / 1000.0) * page_height
@@ -358,6 +400,12 @@ class MinerUParser(RAGFlowPdfParser):
         return "@@{}\t{:.1f}\t{:.1f}\t{:.1f}\t{:.1f}##".format("-".join([str(p) for p in pn]), x0, x1, top, bott)
 
     def crop(self, text, ZM=1, need_position=False):
+        """根据 `@@...##` 位置标签裁剪页面区域。
+
+        这里会把跨页片段拼成一张图，并在真实内容前后补一段半透明上下文，
+        让下游预览时更容易聚焦到命中的正文区域。
+        """
+
         imgs = []
         poss = self.extract_positions(text)
         if not poss:
@@ -378,6 +426,8 @@ class MinerUParser(RAGFlowPdfParser):
             if not pns:
                 self.logger.warning("[MinerU] Empty page index list in crop; skipping this position.")
                 continue
+            # 旧数据或异常标签可能引用了未栅格化的页码，这里选择跳过，
+            # 避免整个裁剪请求直接失败。
             valid_pns = [p for p in pns if 0 <= p < page_count]
             if not valid_pns:
                 self.logger.warning(f"[MinerU] All page indices {pns} out of range for {page_count} pages; skipping.")
@@ -395,6 +445,7 @@ class MinerUParser(RAGFlowPdfParser):
         GAP = 6
         pos = poss[0]
         first_page_idx = pos[0][0]
+        # 在首个正文块前插入一段补边，避免拼接结果一上来就紧贴顶部。
         poss.insert(0, ([first_page_idx], pos[1], pos[2], max(0, pos[3] - 120), max(pos[3] - GAP, 0)))
         pos = poss[-1]
         last_page_idx = pos[0][-1]
@@ -417,6 +468,7 @@ class MinerUParser(RAGFlowPdfParser):
 
         positions = []
         for ii, (pns, left, right, top, bottom) in enumerate(poss):
+            # 统一所有片段的裁剪宽度，避免拼接图在相邻块之间左右抖动。
             right = left + max_width
 
             if bottom <= top:
@@ -445,6 +497,7 @@ class MinerUParser(RAGFlowPdfParser):
             crop0 = img0.crop((x0, y0, x1, y1))
             imgs.append(crop0)
             if 0 < ii < len(poss) - 1:
+                # 头尾补边只是视觉上下文，不应作为真实命中位置返回给调用方。
                 positions.append((pns[0] + self.page_from, x0, x1, y0, y1))
 
             bottom -= img0.size[1]
@@ -482,6 +535,7 @@ class MinerUParser(RAGFlowPdfParser):
         height = 0
         for ii, img in enumerate(imgs):
             if ii == 0 or ii + 1 == len(imgs):
+                # 把人工补出来的头尾区域做暗化处理，和真实命中内容区分开。
                 img = img.convert("RGBA")
                 overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
                 overlay.putalpha(128)
@@ -495,6 +549,8 @@ class MinerUParser(RAGFlowPdfParser):
 
     @staticmethod
     def extract_positions(txt: str):
+        """把 `_line_tag` 生成的行内位置标签重新解析成坐标元组。"""
+
         poss = []
         for tag in re.findall(r"@@[0-9-]+\t[0-9.\t]+##", txt):
             pn, left, right, top, bottom = tag.strip("#").strip("@").split("\t")
@@ -504,6 +560,12 @@ class MinerUParser(RAGFlowPdfParser):
 
     def _read_output(self, output_dir: Path, file_stem: str, method: str = "auto", backend: str = "pipeline") -> list[
         dict[str, Any]]:
+        """在解压结果中定位并读取 MinerU 输出的 content-list JSON。
+
+        MinerU 打包 ZIP 时可能会清洗文件名，因此这里会同时尝试原始 stem
+        和清洗后的 stem，对几种常见落盘路径都做兼容。
+        """
+
         json_file = None
         subdir = None
         attempted = []
@@ -551,10 +613,17 @@ class MinerUParser(RAGFlowPdfParser):
         for item in data:
             for key in ("img_path", "table_img_path", "equation_img_path"):
                 if key in item and item[key]:
+                    # 立即转成绝对路径，避免后续调用方切换 cwd 后找不到图片资源。
                     item[key] = str((subdir / item[key]).resolve())
         return data
 
     def _transfer_to_sections(self, outputs: list[dict[str, Any]], parse_method: str = None):
+        """把 MinerU 的块级输出整理成 RAGFlow 使用的 section 元组格式。
+
+        不同解析模式对返回元组结构的要求略有差异，因此把这层兼容放在这里，
+        让上游 API 调用逻辑不需要感知下游协议细节。
+        """
+
         sections = []
         for output in outputs:
             match output["type"]:
@@ -578,6 +647,8 @@ class MinerUParser(RAGFlowPdfParser):
                     continue  # Skip discarded blocks entirely
 
             if section and parse_method in {"manual", "pipeline"}:
+                # manual/pipeline 模式下仍需要区分图片、表格等类型，便于后续
+                # 的专门处理流程继续使用。
                 sections.append((section, output["type"], self._line_tag(output)))
             elif section and parse_method == "paper":
                 sections.append((section + self._line_tag(output), output["type"]))
@@ -601,6 +672,12 @@ class MinerUParser(RAGFlowPdfParser):
             parse_method: str = "raw",
             **kwargs,
     ) -> tuple:
+        """调用 MinerU 解析 PDF，并返回 RAGFlow 可直接消费的结果。
+
+        这里既支持传入文件路径，也支持传入内存中的 PDF 二进制内容。后者会
+        先落成临时文件，因为远端 MinerU API 目前只接受文件上传。
+        """
+
         import shutil
 
         self.outlines = extract_pdf_outlines(binary if binary is not None else filepath)
@@ -609,6 +686,7 @@ class MinerUParser(RAGFlowPdfParser):
 
         parser_cfg = kwargs.get('parser_config', {})
         lang = parser_cfg.get('mineru_lang') or kwargs.get('lang', 'English')
+        # 前端和旧配置里保存的是易读语言名，而 MinerU API 需要它自己的语言码。
         mineru_lang_code = LANGUAGE_TO_MINERU_MAP.get(lang, 'ch')  # Defaults to Chinese if not matched
         mineru_method_raw_str = parser_cfg.get('mineru_parse_method', 'auto')
         enable_formula = parser_cfg.get('mineru_formula_enable', True)
@@ -662,6 +740,8 @@ class MinerUParser(RAGFlowPdfParser):
                 formula_enable=enable_formula,
                 table_enable=enable_table,
             )
+            # 整体流程是：上传 PDF -> 解压 ZIP -> 读取 JSON -> 转成当前解析链路
+            # 需要的元组结构。
             final_out_dir = self._run_mineru(pdf, out_dir, options, callback=callback)
             outputs = self._read_output(final_out_dir, pdf.stem, method=mineru_method_raw_str, backend=backend)
             self.logger.info(f"[MinerU] Parsed {len(outputs)} blocks from PDF.")
@@ -670,6 +750,7 @@ class MinerUParser(RAGFlowPdfParser):
 
             return self._transfer_to_sections(outputs, parse_method), self._transfer_to_tables(outputs)
         finally:
+            # 清理只做尽力而为，不能让清理失败覆盖真正的解析结果。
             if temp_pdf and temp_pdf.exists():
                 try:
                     temp_pdf.unlink()

@@ -767,18 +767,30 @@ async def run():
     try:
 
         def _run_sync():
+            # ==================== 步骤1: 权限校验 ====================
+            # 批量检查用户是否有权限访问所有指定的文档
             for doc_id in req["doc_ids"]:
                 if not DocumentService.accessible(doc_id, uid):
                     return get_json_result(data=False, message="No authorization.", code=RetCode.AUTHENTICATION_ERROR)
 
+            # ==================== 步骤2: 初始化 ====================
+            # kb_table_num_map: 用于跟踪各知识库中表格类型文档的数量
+            # 当表格数量归零时，需要清理知识库的字段映射
             kb_table_num_map = {}
+
+            # ==================== 步骤3: 逐个处理文档 ====================
             for id in req["doc_ids"]:
+                # 3.1 构建基础更新信息
                 info = {"run": str(req["run"]), "progress": 0}
+
+                # 3.2 如果是"运行+删除"模式，重置解析相关字段
+                # 场景：用户希望重新解析文档，并清除之前的解析结果
                 if str(req["run"]) == TaskStatus.RUNNING.value and req.get("delete", False):
                     info["progress_msg"] = ""
                     info["chunk_num"] = 0
                     info["token_num"] = 0
 
+                # 3.3 获取文档所属租户和文档详情
                 tenant_id = DocumentService.get_tenant_id(id)
                 if not tenant_id:
                     return get_data_error_result(message="Tenant not found!")
@@ -786,31 +798,55 @@ async def run():
                 if not e:
                     return get_data_error_result(message="Document not found!")
 
+                # ==================== 步骤4: 处理取消任务逻辑 ====================
                 if str(req["run"]) == TaskStatus.CANCEL.value:
+                    # 查询该文档的所有任务
                     tasks = list(TaskService.query(doc_id=id))
+                    # 检查是否有未完成的任务（进度 < 100%）
                     has_unfinished_task = any((task.progress or 0) < 1 for task in tasks)
+
+                    # 只有在以下情况才能取消：
+                    # - 文档状态为 RUNNING（运行中）
+                    # - 文档状态为 CANCEL（取消中）
+                    # - 存在未完成的子任务
                     if str(doc.run) in [TaskStatus.RUNNING.value, TaskStatus.CANCEL.value] or has_unfinished_task:
-                        cancel_all_task_of(id)
+                        cancel_all_task_of(id)  # 取消该文档的所有任务
                     else:
+                        # 任务已完成或未开始，不能取消
                         return get_data_error_result(message="Cannot cancel a task that is not in RUNNING status")
+
+                # ==================== 步骤5: 处理重新运行逻辑 ====================
+                # 条件：delete=True + 运行任务 + 文档已完成
+                # 场景：对已完成的文档重新解析，需要清理统计计数
                 if all([("delete" not in req or req["delete"]), str(req["run"]) == TaskStatus.RUNNING.value, str(doc.run) == TaskStatus.DONE.value]):
                     DocumentService.clear_chunk_num_when_rerun(doc.id)
 
+                # ==================== 步骤6: 更新文档状态 ====================
                 DocumentService.update_by_id(id, info)
+
+                # ==================== 步骤7: 删除现有解析结果（可选） ====================
                 if req.get("delete", False):
+                    # 7.1 删除任务表中的相关记录
                     TaskService.filter_delete([Task.doc_id == id])
+                    # 7.2 从文档存储（Elasticsearch/Infinity）中删除该文档的 chunks
                     if settings.docStoreConn.index_exist(search.index_name(tenant_id), doc.kb_id):
                         settings.docStoreConn.delete({"doc_id": id}, search.index_name(tenant_id), doc.kb_id)
 
+                # ==================== 步骤8: 启动解析任务 ====================
                 if str(req["run"]) == TaskStatus.RUNNING.value:
+                    # 8.1 应用知识库配置（可选）
+                    # 场景：用户希望使用知识库级别的解析器配置覆盖文档级别配置
                     if req.get("apply_kb"):
                         e, kb = KnowledgebaseService.get_by_id(doc.kb_id)
                         if not e:
                             raise LookupError("Can't find this dataset!")
+                        # 同步知识库的解析器配置到文档
                         doc.parser_config["llm_id"] = kb.parser_config.get("llm_id")
                         doc.parser_config["enable_metadata"] = kb.parser_config.get("enable_metadata", False)
                         doc.parser_config["metadata"] = kb.parser_config.get("metadata", {})
                         DocumentService.update_parser_config(doc.id, doc.parser_config)
+
+                    # 8.2 执行解析任务
                     doc_dict = doc.to_dict()
                     DocumentService.run(tenant_id, doc_dict, kb_table_num_map)
 

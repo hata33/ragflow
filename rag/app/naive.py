@@ -239,7 +239,7 @@ def by_mineru(
                 logging.warning(f"fallback to env mineru: {e}")
 
         # 如果找到了 MinerU 模型配置，执行 OCR 解析
-        if mineru_llm_name:
+        if mineru_llm_name: 
             try:
                 # 获取 OCR 模型配置
                 ocr_model_config = get_model_config_by_type_and_name(tenant_id, LLMType.OCR, mineru_llm_name)
