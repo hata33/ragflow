@@ -43,7 +43,7 @@ from api.db.services.common_service import CommonService
 from api.db.services.document_service import DocumentService
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp
-from common.constants import StatusEnum, TaskStatus
+from common.constants import StatusEnum, TaskStatus, MAXIMUM_PAGE_NUMBER, MAXIMUM_TASK_PAGE_NUMBER
 from deepdoc.parser.excel_parser import RAGFlowExcelParser
 from rag.utils.redis_conn import REDIS_CONN
 from common import settings
@@ -53,6 +53,7 @@ from rag.nlp import search
 CANVAS_DEBUG_DOC_ID = "dataflow_x"
 # GraphRaptor 的虚拟文档 ID
 GRAPH_RAPTOR_FAKE_DOC_ID = "graph_raptor_x"
+TASK_MAX_LOG_LENGTH = int(os.environ.get("TASK_MAX_LOG_LENGTH", 3000)) # TEXT MAX is 64 KiB bytes!
 
 
 def trim_header_by_lines(text: str, max_length) -> str:
@@ -457,8 +458,7 @@ class TaskService(CommonService):
             # macOS 不支持数据库锁，直接更新
             # 更新进度消息
             if info["progress_msg"]:
-                # 追加新消息并裁剪到最多 3000 行
-                progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], 3000)
+                progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], TASK_MAX_LOG_LENGTH)
                 cls.model.update(progress_msg=progress_msg).where(cls.model.id == id).execute()
 
             # 更新进度值
@@ -476,7 +476,7 @@ class TaskService(CommonService):
             with DB.lock("update_progress", -1):
                 # 更新进度消息
                 if info["progress_msg"]:
-                    progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], 3000)
+                    progress_msg = trim_header_by_lines(task.progress_msg + "\n" + info["progress_msg"], TASK_MAX_LOG_LENGTH)
                     cls.model.update(progress_msg=progress_msg).where(cls.model.id == id).execute()
 
                 # 更新进度值
@@ -544,12 +544,12 @@ def queue_tasks(doc: dict, bucket: str, name: str, priority: int):
     # 内部函数：创建新任务模板
     def new_task():
         return {
-            "id": get_uuid(),              # 生成唯一任务 ID
-            "doc_id": doc["id"],           # 关联文档 ID
-            "progress": 0.0,               # 初始进度为 0
-            "from_page": 0,                # 起始页（默认为 0）
-            "to_page": 100000000,          # 结束页（默认为很大的值）
-            "begin_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # 开始时间
+            "id": get_uuid(),
+            "doc_id": doc["id"],
+            "progress": 0.0,
+            "from_page": 0,
+            "to_page": MAXIMUM_TASK_PAGE_NUMBER,
+            "begin_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
     # 初始化任务数组
@@ -578,12 +578,8 @@ def queue_tasks(doc: dict, bucket: str, name: str, priority: int):
 
         # 特殊解析器或不需要布局识别时，处理整个文档
         if doc["parser_id"] in ["one", "knowledge_graph"] or do_layout != "DeepDOC" or doc["parser_config"].get("toc_extraction", False):
-            page_size = 10 ** 9  # 设置为很大的值，表示处理整个文档
-
-        # 获取用户指定的页码范围
-        page_ranges = doc["parser_config"].get("pages") or [(1, 10 ** 5)]
-
-        # 为每个页码范围创建任务
+            page_size = MAXIMUM_TASK_PAGE_NUMBER
+        page_ranges = doc["parser_config"].get("pages") or [(1, MAXIMUM_PAGE_NUMBER)]
         for s, e in page_ranges:
             # 调整页码（从 1-based 转为 0-based）
             s -= 1
@@ -613,7 +609,9 @@ def queue_tasks(doc: dict, bucket: str, name: str, priority: int):
         # 其他类型的文档，创建单个任务
         parse_task_array.append(new_task())
 
-    # 获取分块配置
+    # Determine suffix based on parser_id (consistent with SAAS version line 444)
+    suffix = "common" if doc["parser_id"] != "resume" else "resume"
+
     chunking_config = DocumentService.get_chunking_config(doc["id"])
 
     # 为每个任务计算摘要（用于任务去重和优化）
@@ -681,7 +679,7 @@ def queue_tasks(doc: dict, bucket: str, name: str, priority: int):
     for unfinished_task in unfinished_task_array:
         # 将任务加入对应优先级的队列
         assert REDIS_CONN.queue_product(
-            settings.get_svr_queue_name(priority), message=unfinished_task
+            settings.get_svr_queue_name(priority, suffix), message=unfinished_task
         ), "Can't access Redis. Please check the Redis' status."
 
 
@@ -737,11 +735,8 @@ def reuse_prev_task_chunks(task: dict, prev_tasks: list[dict], chunking_config: 
 
     # 重用旧任务的 chunks
     task["chunk_ids"] = prev_task["chunk_ids"]
-    task["progress"] = 1.0  # 标记为已完成
-
-    # 生成进度消息
-    if "from_page" in task and "to_page" in task and int(task['to_page']) - int(task['from_page']) >= 10 ** 6:
-        # 如果页码范围很大（表示处理整个文档）
+    task["progress"] = 1.0
+    if "from_page" in task and "to_page" in task and (int(task['to_page']) - int(task['from_page']) >= 10 ** 6 or (int(task['from_page']) == MAXIMUM_TASK_PAGE_NUMBER and int(task['to_page']) == MAXIMUM_TASK_PAGE_NUMBER)):
         task["progress_msg"] = f"Page({task['from_page']}~{task['to_page']}): "
     else:
         task["progress_msg"] = ""
@@ -839,13 +834,13 @@ def queue_dataflow(
     """
     # 构建任务字典
     task = dict(
-        id=task_id,                                   # 任务 ID
-        doc_id=doc_id,                                # 文档 ID
-        from_page=0,                                  # 起始页
-        to_page=100000000,                            # 结束页
-        task_type="dataflow" if not rerun else "dataflow_rerun",  # 任务类型
-        priority=priority,                            # 优先级
-        begin_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # 开始时间
+        id=task_id,
+        doc_id=doc_id,
+        from_page=0,
+        to_page=MAXIMUM_TASK_PAGE_NUMBER,
+        task_type="dataflow" if not rerun else "dataflow_rerun",
+        priority=priority,
+        begin_at= datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 
     # 如果不是虚拟文档，需要清理旧任务
@@ -866,7 +861,7 @@ def queue_dataflow(
 
     # 将任务加入 Redis 队列
     if not REDIS_CONN.queue_product(
-            settings.get_svr_queue_name(priority), message=task
+            settings.get_svr_queue_name(priority, "common"), message=task
     ):
         return False, "Can't access Redis. Please check the Redis' status."
 

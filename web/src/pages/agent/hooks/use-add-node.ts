@@ -13,10 +13,12 @@ import {
   initialArXivValues,
   initialBeginValues,
   initialBingValues,
+  initialBrowserValues,
   initialCategorizeValues,
   initialCodeValues,
   initialCrawlerValues,
   initialDataOperationsValues,
+  initialDocGeneratorValues,
   initialDuckValues,
   initialEmailValues,
   initialExeSqlValues,
@@ -31,7 +33,6 @@ import {
   initialLoopValues,
   initialMessageValues,
   initialNoteValues,
-  initialPDFGeneratorValues,
   initialParserValues,
   initialPubMedValues,
   initialRetrievalValues,
@@ -75,7 +76,7 @@ const GroupStartNodeMap = {
       name: Operator.IterationStart,
       form: initialIterationStartValues,
     },
-    extent: 'parent' as 'parent',
+    extent: 'parent' as const,
   },
   [Operator.Loop]: {
     id: `${Operator.LoopStart}:${humanId()}`,
@@ -86,7 +87,7 @@ const GroupStartNodeMap = {
       name: Operator.LoopStart,
       form: {},
     },
-    extent: 'parent' as 'parent',
+    extent: 'parent' as const,
   },
 };
 
@@ -180,7 +181,8 @@ export const useInitializeOperatorParams = () => {
       [Operator.Loop]: initialLoopValues,
       [Operator.LoopStart]: {},
       [Operator.ExitLoop]: {},
-      [Operator.PDFGenerator]: initialPDFGeneratorValues,
+      [Operator.DocGenerator]: initialDocGeneratorValues,
+      [Operator.Browser]: { ...initialBrowserValues, llm_id: llmId },
       [Operator.ExcelProcessor]: {},
     };
   }, [llmId]);

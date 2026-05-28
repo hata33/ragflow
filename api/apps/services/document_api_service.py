@@ -13,11 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-"""文档 API 服务模块
-
-该模块提供了文档管理的核心功能，包括文档名称更新、分块方法更新、
-状态更新、字段验证等辅助函数。
-"""
+import logging
 
 from api.db.services.document_service import DocumentService
 from api.db.services.file2document_service import File2DocumentService
@@ -67,49 +63,89 @@ def update_document_name_only(document_id, req_doc_name):
         )
     return None
 
-def update_chunk_method_only(req, doc, dataset_id, tenant_id):
-    """仅更新分块方法（不进行验证）
+def update_chunk_method(req, doc, tenant_id):
+    """
+    Update chunk method only (without validation).
 
     更新文档的分块方法和解析器配置，如果分块方法发生变化则重置文档进度。
     如果方法发生变化，还会清除文档存储中现有的分块。
 
     Args:
-        req: 包含 chunk_method 和 parser_config 的请求字典
-        doc: 数据库中的文档模型
-        dataset_id: 包含该文档的数据集 ID
-        tenant_id: 文档存储的租户 ID
+        req: The request dictionary containing chunk_method and parser_config.
+        doc: The document model from the database.
+        tenant_id: The tenant ID for the document store.
 
     Returns:
         成功时返回 None，失败时返回错误结果字典
     """
     if doc.parser_id.lower() != req["chunk_method"].lower():
-        # if chunk method changed
-        e = DocumentService.update_by_id(
-            doc.id,
-            {
-                "parser_id": req["chunk_method"],
-                "progress": 0,
-                "progress_msg": "",
-                "run": TaskStatus.UNSTART.value,
-            },
-        )
-        if not e:
-            return get_error_data_result(message="Document not found!")
+        # if chunk method changed, reset document for reparse
+        result = reset_document_for_reparse(doc, tenant_id, parser_id=req["chunk_method"])
+        if result:
+            return result
     if not req.get("parser_config"):
         req["parser_config"] = get_parser_config(req["chunk_method"], req.get("parser_config"))
         DocumentService.update_parser_config(doc.id, req["parser_config"])
+    return None
+
+
+def reset_document_for_reparse(doc, tenant_id, parser_id=None, pipeline_id=None):
+    """
+    Reset document for reparsing.
+
+    Updates the parser_id and/or pipeline_id for a document, resets its progress,
+    clears existing chunks from the document store, and removes chunk images.
+
+    Args:
+        doc: The document model from the database.
+        tenant_id: The tenant ID for the document store.
+        parser_id: Optional new parser_id (chunk method). If None, keeps existing.
+        pipeline_id: Optional new pipeline_id. If None, keeps existing.
+
+    Returns:
+        None if successful, or an error result dictionary if failed.
+    """
+
+    # Build update fields
+    update_fields = {
+        "progress": 0,
+        "progress_msg": "",
+        "run": TaskStatus.UNSTART.value,
+    }
+    if parser_id is not None:
+        update_fields["parser_id"] = parser_id
+    if pipeline_id is not None:
+        update_fields["pipeline_id"] = pipeline_id
+
+    # Update document
+    e = DocumentService.update_by_id(doc.id, update_fields)
+    if not e:
+        return get_error_data_result(message="Document not found!")
+
+    # Delete chunks from document store
     if doc.token_num > 0:
-        e = DocumentService.increment_chunk_num(
-            doc.id,
-            doc.kb_id,
-            doc.token_num * -1,
-            doc.chunk_num * -1,
-            doc.process_duration * -1,
+        try:
+            e = DocumentService.increment_chunk_num(
+                doc.id,
+                doc.kb_id,
+                doc.token_num * -1,
+                doc.chunk_num * -1,
+                doc.process_duration * -1,
             )
+        except LookupError:
+            return get_error_data_result(message="Document not found!")
         if not e:
             return get_error_data_result(message="Document not found!")
-        settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), dataset_id)
+        settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), doc.kb_id)
+
+    # Delete chunk images
+    try:
+        DocumentService.delete_chunk_images(doc, tenant_id)
+    except Exception as e:
+        logging.error(f"error when delete chunk images:{e}")
+
     return None
+
 
 def update_document_status_only(status:int, doc, kb):
     """仅更新文档状态（不进行验证）
@@ -168,8 +204,10 @@ def validate_document_update_fields(update_doc_req:UpdateDocumentReq, doc, req):
 
     return None, None
 
-def rename_doc_key(doc):
-    """重命名文档键以匹配 API 响应格式
+
+def map_doc_keys(doc):
+    """
+    Rename document keys to match API response format.
 
     将内部文档模型字段名称转换为外部 API 响应字段名称
     （例如 'chunk_num' -> 'chunk_count'）。
@@ -180,12 +218,76 @@ def rename_doc_key(doc):
     Returns:
         包含重命名键的字典，用于 API 响应
     """
+    renamed_doc = _process_key_mappings(doc)
+    if "run" in renamed_doc.keys():
+        renamed_doc = _process_run_mapping(renamed_doc, renamed_doc["run"])
+    return renamed_doc
+
+
+def map_doc_keys_with_run_status(doc, run_status):
+    """
+    Map document keys to match API response format.
+
+    Converts internal document model field names to the external API
+    response field names (e.g., 'chunk_num' -> 'chunk_count').
+
+    Args:
+        doc: The document model from the database OR a dictionary.
+        run_status: Optional explicit run status value. If not provided:
+            - If doc has 'run' field, it will be mapped using run_mapping
+            - Otherwise, 'run' will be set to 'UNSTART' (for new uploads)
+
+    Returns:
+        A dictionary with renamed keys for API response.
+    """
+    renamed_doc = _process_key_mappings(doc)
+    renamed_doc = _process_run_mapping(renamed_doc, run_status)
+    return renamed_doc
+
+
+def _process_key_mappings(doc):
+    """
+    Map document keys to match API response format.
+
+    Converts internal document model field names to the external API
+    response field names (e.g., 'chunk_num' -> 'chunk_count').
+
+    Args:
+        doc: The document model from the database OR a dictionary.
+
+    Returns:
+        A dictionary with renamed keys for API response.
+    """
     key_mapping = {
         "chunk_num": "chunk_count",
         "kb_id": "dataset_id",
         "token_num": "token_count",
         "parser_id": "chunk_method",
     }
+
+    # Handle both dict and model input
+    items = doc.to_dict().items() if hasattr(doc, 'to_dict') else doc.items()
+
+    renamed_doc = {}
+    for key, value in items:
+        new_key = key_mapping.get(key, key)
+        renamed_doc[new_key] = value
+    return renamed_doc
+
+
+def _process_run_mapping(doc, run_status):
+    """
+    Map document keys to match API response format.
+
+    Args:
+        doc: The document model from the database OR a dictionary.
+        run_status: Optional explicit run status value.
+        If provided, 'run' field of doc will be set to run_status.
+        If not provided, 'run' will be set to 'UNSTART' (for new uploads)
+
+    Returns:
+        A dictionary with renamed keys for API response.
+    """
     run_mapping = {
         "0": "UNSTART",
         "1": "RUNNING",
@@ -193,11 +295,10 @@ def rename_doc_key(doc):
         "3": "DONE",
         "4": "FAIL",
     }
-    renamed_doc = {}
-    for key, value in doc.to_dict().items():
-        new_key = key_mapping.get(key, key)
-        renamed_doc[new_key] = value
-        if key == "run":
-            renamed_doc["run"] = run_mapping.get(str(value))
-    return renamed_doc
 
+    # Handle run field
+    if run_status is None or run_status not in run_mapping.keys():
+        run_status = "0"
+
+    doc["run"] = run_mapping[run_status]
+    return doc

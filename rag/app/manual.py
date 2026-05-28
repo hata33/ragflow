@@ -39,7 +39,7 @@ import logging
 import copy
 import re
 
-from common.constants import ParserType
+from common.constants import ParserType, MAXIMUM_PAGE_NUMBER
 from io import BytesIO
 from deepdoc.parser.utils import extract_pdf_outlines
 from rag.nlp import rag_tokenizer, tokenize, tokenize_table, bullets_category, title_frequency, tokenize_chunks, docx_question_level, attach_media_context, concat_img
@@ -60,28 +60,10 @@ class Pdf(PdfParser):
     """
 
     def __init__(self):
-        self.model_speciess = ParserType.MANUAL.value
+        self.model_species = ParserType.MANUAL.value
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
-        """
-        解析 PDF 文档
-
-        执行完整的 PDF 解析流程。
-
-        Args:
-            filename: PDF 文件名或路径
-            binary: PDF 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-            zoomin: 图片放大倍数（默认 3）
-            callback: 进度回调函数
-
-        Returns:
-            tuple: (sections, tbls)
-                - sections: 文本段落列表
-                - tbls: 表格列表
-        """
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, zoomin=3, callback=None):
         from timeit import default_timer as timer
 
         start = timer()
@@ -124,24 +106,7 @@ class Docx(DocxParser):
     def __init__(self):
         pass
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None):
-        """
-        解析 DOCX 文档
-
-        识别问题和答案的层级结构，构建问答列表。
-
-        Args:
-            filename: DOCX 文件名或路径
-            binary: DOCX 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-            callback: 进度回调函数
-
-        Returns:
-            tuple: (ti_list, tbls)
-                - ti_list: 问答列表，每个元素为 (question, answer, image)
-                - tbls: 表格列表
-        """
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, callback=None):
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0
         last_answer, last_image = "", None
@@ -204,7 +169,7 @@ class Docx(DocxParser):
         return ti_list, tbls
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=None, **kwargs):
     """
     解析手册文档并分块
 
@@ -276,7 +241,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
 
             txt, layoutno, poss = section
             if isinstance(poss, str):
-                poss = pdf_parser.extract_positions(poss)
+                poss = (getattr(pdf_parser, "extract_positions", lambda _: [])(poss) or [[0, 0, 0, 0, 0]])
                 if poss:
                     first = poss[0]  # tuple: ([pn], x1, x2, y1, y2)
                     pn = first[0]
@@ -360,11 +325,16 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         image_ctx = max(0, int(parser_config.get("image_context_size", 0) or 0))
         if table_ctx or image_ctx:
             attach_media_context(res, table_ctx, image_ctx)
+        if res and pdf_parser and getattr(pdf_parser, "outlines", None):
+            res[0]["__outline__"] = [
+                {"title": title, "depth": depth}
+                for title, depth, *_ in pdf_parser.outlines
+            ]
         return res
 
     elif re.search(r"\.docx?$", filename, re.IGNORECASE):
         docx_parser = Docx()
-        ti_list, tbls = docx_parser(filename, binary, from_page=0, to_page=10000, callback=callback)
+        ti_list, tbls = docx_parser(filename, binary, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, callback=callback)
         tbls = vision_figure_parser_docx_wrapper(sections=ti_list, tbls=tbls, callback=callback, **kwargs)
         res = tokenize_table(tbls, doc, eng)
         for text, image in ti_list:

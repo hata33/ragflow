@@ -47,6 +47,7 @@ from pypdf import PdfReader as pdf2_read
 from deepdoc.parser import PdfParser, PlainParser
 from deepdoc.parser.ppt_parser import RAGFlowPptParser
 from rag.app.naive import by_plaintext, PARSERS
+from common.constants import MAXIMUM_PAGE_NUMBER
 from common.parser_config_utils import normalize_layout_recognizer
 from rag.nlp import rag_tokenizer
 from rag.nlp import tokenize
@@ -64,26 +65,7 @@ class Pdf(PdfParser):
     def __init__(self):
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None, **kwargs):
-        """
-        解析演示文稿 PDF
-
-        执行完整的解析流程，每页作为一个独立的块。
-
-        Args:
-            filename: PDF 文件名或路径
-            binary: PDF 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-            zoomin: 图片放大倍数（默认 3）
-            callback: 进度回调函数
-            **kwargs: 其他参数
-
-        Returns:
-            tuple: (res, tbls)
-                - res: 每页的内容列表，每个元素为 (text, image)
-                - tbls: 表格列表（通常为空）
-        """
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, zoomin=3, callback=None, **kwargs):
         # 1. OCR
         callback(msg="OCR started")
         self.__images__(filename if not binary else binary, zoomin, from_page, to_page, callback)
@@ -163,32 +145,7 @@ class Pdf(PdfParser):
 
 
 class PlainPdf(PlainParser):
-    """
-    演示文稿纯文本 PDF 解析器
-
-    继承自 PlainParser，直接提取 PDF 中的文本，
-    不进行 OCR 和布局分析。
-    """
-
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
-        """
-        解析演示文稿 PDF（纯文本模式）
-
-        直接提取 PDF 中的文本内容。
-
-        Args:
-            filename: PDF 文件名或路径
-            binary: PDF 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-            callback: 进度回调函数
-            **kwargs: 其他参数
-
-        Returns:
-            tuple: (page_txt, tbls)
-                - page_txt: 每页的文本列表
-                - tbls: 表格列表（通常为空）
-        """
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, callback=None, **kwargs):
         self.pdf = pdf2_read(filename if not binary else BytesIO(binary))
         page_txt = []
         for page in self.pdf.pages[from_page:to_page]:
@@ -197,7 +154,7 @@ class PlainPdf(PlainParser):
         return [(txt, None) for txt in page_txt], []
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, parser_config=None, **kwargs):
+def chunk(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=None, parser_config=None, **kwargs):
     """
     解析演示文稿并分块
 
@@ -231,7 +188,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     if re.search(r"\.pptx?$", filename, re.IGNORECASE):
         try:
             ppt_parser = RAGFlowPptParser()
-            for pn, txt in enumerate(ppt_parser(filename if not binary else binary, from_page, 1000000, callback)):
+            for pn, txt in enumerate(ppt_parser(filename if not binary else binary, from_page, MAXIMUM_PAGE_NUMBER, callback)):
                 d = copy.deepcopy(doc)
                 pn += from_page
                 d["doc_type_kwd"] = "image"

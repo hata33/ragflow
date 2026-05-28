@@ -48,35 +48,12 @@ from rag.nlp import rag_tokenizer, tokenize
 from deepdoc.parser import PdfParser, ExcelParser, HtmlParser
 from deepdoc.parser.figure_parser import vision_figure_parser_docx_wrapper_naive
 from rag.app.naive import by_plaintext, PARSERS
+from common.constants import MAXIMUM_PAGE_NUMBER, MAXIMUM_TASK_PAGE_NUMBER
 from common.parser_config_utils import normalize_layout_recognizer
 
 
 class Pdf(PdfParser):
-    """
-    单文档解析专用 PDF 解析器
-
-    继承自 PdfParser，将整个 PDF 内容作为一个块处理。
-    """
-
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
-        """
-        解析 PDF 文档
-
-        执行 OCR、布局分析和表格识别，保持原始文本顺序。
-
-        Args:
-            filename: PDF 文件名或路径
-            binary: PDF 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-            zoomin: 图片放大倍数（默认 3）
-            callback: 进度回调函数
-
-        Returns:
-            tuple: (sections, tbls)
-                - sections: 文本段落列表（按位置排序）
-                - tbls: 表格列表
-        """
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, zoomin=3, callback=None):
         from timeit import default_timer as timer
 
         start = timer()
@@ -103,7 +80,7 @@ class Pdf(PdfParser):
         return [(txt, "") for txt, _ in sorted(sections, key=lambda x: (x[-1][0][0], x[-1][0][3], x[-1][0][1]))], tbls
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=None, **kwargs):
     """
     解析文档并作为单个块处理
 
@@ -193,7 +170,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     elif re.search(r"\.xlsx?$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")
         excel_parser = ExcelParser()
-        sections = excel_parser.html(binary, 1000000000)
+        sections = excel_parser.html(binary, MAXIMUM_TASK_PAGE_NUMBER)
 
     elif re.search(r"\.(txt|md|markdown|mdx)$", filename, re.IGNORECASE):
         callback(0.1, "Start to parse.")

@@ -45,6 +45,7 @@ from io import BytesIO
 from deepdoc.parser.utils import get_text
 from rag.app import naive
 from rag.app.naive import by_plaintext, PARSERS
+from common.constants import MAXIMUM_PAGE_NUMBER
 from common.parser_config_utils import normalize_layout_recognizer
 from rag.nlp import bullets_category, is_english, remove_contents_table, hierarchical_merge, make_colon_as_title, naive_merge, random_choices, tokenize_table, tokenize_chunks, attach_media_context
 from rag.nlp import rag_tokenizer
@@ -55,32 +56,7 @@ from rag.utils.lazy_image import LazyImage
 
 
 class Pdf(PdfParser):
-    """
-    书籍专用 PDF 解析器
-
-    继承自 PdfParser，针对书籍类 PDF 文档进行了优化。
-    支持完整的 OCR、布局分析和表格识别流程。
-    """
-
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
-        """
-        解析 PDF 文档
-
-        执行完整的 PDF 解析流程，包括 OCR、布局分析、表格识别等。
-
-        Args:
-            filename: PDF 文件名或路径
-            binary: PDF 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-            zoomin: 图片放大倍数（默认 3）
-            callback: 进度回调函数
-
-        Returns:
-            tuple: (sections, tbls)
-                - sections: 文本段落列表
-                - tbls: 表格列表
-        """
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, zoomin=3, callback=None):
         from timeit import default_timer as timer
 
         start = timer()
@@ -108,7 +84,7 @@ class Pdf(PdfParser):
         return [(b["text"] + self._line_tag(b, zoomin), b.get("layoutno", "")) for b in self.boxes], tbls
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=None, **kwargs):
     """
     解析书籍文档并分块
 

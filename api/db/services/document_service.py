@@ -13,26 +13,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-"""
-文档服务模块
-
-本模块提供文档（Document）管理的核心业务逻辑，包括：
-- 文档的查询、分页、过滤与统计
-- 文档解析任务的创建、进度同步与取消
-- 文档删除时的级联清理（任务、chunks、缩略图、知识图谱引用等）
-- 文档上传并同步解析（用于对话中直接上传）
-- 文档与文件的关联管理
-- 文档元数据管理
-"""
-import asyncio
-import json
 import logging
 import random
-import re
-from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
 from datetime import datetime
-from io import BytesIO
 
 import xxhash
 from peewee import fn, Case, JOIN
@@ -44,13 +27,15 @@ from api.db.db_utils import bulk_insert_into_db
 from api.db.services.common_service import CommonService, retry_deadlock_operation
 from api.db.services.knowledgebase_service import KnowledgebaseService
 from api.db.services.doc_metadata_service import DocMetadataService
+
+from common import settings
+from common.constants import ParserType, StatusEnum, TaskStatus, SVR_CONSUMER_GROUP_NAME, MAXIMUM_TASK_PAGE_NUMBER
+from common.doc_store.doc_store_base import OrderByExpr
 from common.misc_utils import get_uuid
 from common.time_utils import current_timestamp, get_format_time
-from common.constants import LLMType, ParserType, StatusEnum, TaskStatus, SVR_CONSUMER_GROUP_NAME
-from rag.nlp import rag_tokenizer, search
+
+from rag.nlp import search
 from rag.utils.redis_conn import REDIS_CONN
-from common.doc_store.doc_store_base import OrderByExpr
-from common import settings
 
 
 class DocumentService(CommonService):
@@ -165,8 +150,7 @@ class DocumentService(CommonService):
         if keywords:
             # 按关键词模糊匹配（忽略大小写）
             docs = docs.where(fn.LOWER(cls.model.name).contains(keywords.lower()))
-        if doc_ids:
-            # 按 ID 列表过滤
+        if doc_ids is not None:
             docs = docs.where(cls.model.id.in_(doc_ids))
         if suffix:
             # 按文件后缀过滤
@@ -233,32 +217,7 @@ class DocumentService(CommonService):
 
     @classmethod
     @DB.connection_context()
-    def get_by_kb_id(cls, kb_id, page_number, items_per_page, orderby, desc, keywords, run_status, types, suffix, doc_ids=None, return_empty_metadata=False):
-        """
-        按知识库 ID 查询文档，支持多条件过滤和分页
-
-        相比 get_list，此方法额外关联了 pipeline_name 和创建者昵称。
-
-        逻辑说明：
-        1. 构建多表 JOIN 查询（Document -> File2Document -> File -> UserCanvas -> User）
-        2. 应用过滤条件
-        3. 如果 return_empty_metadata=True，只返回没有元数据的文档
-        4. 处理排序和分页
-        5. 查询并合并元数据
-
-        :param kb_id: 知识库 ID
-        :param page_number: 页码
-        :param items_per_page: 每页数量
-        :param orderby: 排序字段
-        :param desc: 是否降序
-        :param keywords: 关键词
-        :param run_status: 运行状态列表
-        :param types: 文档类型列表
-        :param suffix: 文件后缀列表
-        :param doc_ids: 文档 ID 列表
-        :param return_empty_metadata: 是否只返回没有元数据的文档
-        :return: (文档列表, 总数)
-        """
+    def get_by_kb_id(cls, kb_id, page_number, items_per_page, orderby, desc, keywords, run_status, types, suffix, name=None, doc_ids=None, return_empty_metadata=False):
         fields = cls.get_cls_model_fields()
 
         # 根据是否有关键词选择不同的查询路径
@@ -282,9 +241,7 @@ class DocumentService(CommonService):
                 .join(User, on=(cls.model.created_by == User.id), join_type=JOIN.LEFT_OUTER)
                 .where(cls.model.kb_id == kb_id)
             )
-
-        # 应用过滤条件
-        if doc_ids:
+        if doc_ids is not None:
             docs = docs.where(cls.model.id.in_(doc_ids))
         if run_status:
             docs = docs.where(cls.model.run.in_(run_status))
@@ -292,8 +249,9 @@ class DocumentService(CommonService):
             docs = docs.where(cls.model.type.in_(types))
         if suffix:
             docs = docs.where(cls.model.suffix.in_(suffix))
+        if name:
+            docs = docs.where(cls.model.name == name)
 
-        metadata_map = {}
         if return_empty_metadata:
             # 获取所有有元数据的文档 ID，然后排除它们，只返回无元数据的文档
             metadata_map = DocMetadataService.get_metadata_for_documents(None, kb_id)
@@ -654,6 +612,35 @@ class DocumentService(CommonService):
 
     @classmethod
     @DB.connection_context()
+    def list_id_content_hash_map_by_kb_and_source_type(cls, kb_id, source_type, page_size=500):
+        """Return {doc_id: content_hash} for the connector's existing docs.
+
+        Used by the fingerprint-bypass path to decide which keys can skip a
+        re-fetch -- if the connector's listing fingerprint equals content_hash,
+        the body hasn't changed since the last sync.
+
+        Ordered by create_time so LIMIT/OFFSET pagination is stable under
+        concurrent writes; without this, page boundaries can drop or duplicate
+        rows and the resulting map would silently miss entries.
+        """
+        fields = [cls.model.id, cls.model.content_hash]
+        docs = cls.model.select(*fields).where(
+            cls.model.kb_id == kb_id,
+            cls.model.source_type == source_type,
+        ).order_by(cls.model.create_time.asc())
+        offset = 0
+        result: dict[str, str] = {}
+        while True:
+            batch = list(docs.offset(offset).limit(page_size).dicts())
+            if not batch:
+                break
+            for row in batch:
+                result[row["id"]] = row.get("content_hash") or ""
+            offset += page_size
+        return result
+
+    @classmethod
+    @DB.connection_context()
     def get_all_docs_by_creator_id(cls, creator_id):
         """
         获取用户创建的所有文档
@@ -750,7 +737,10 @@ class DocumentService(CommonService):
             # 文档已被并发请求删除，直接返回（幂等）
             return True
 
-        # 步骤 2: 取消所有正在运行的任务（通过 Redis 设置取消标记）
+        chunk_index_name = search.index_name(tenant_id)
+        chunk_index_exists = settings.docStoreConn.index_exist(chunk_index_name, doc.kb_id)
+
+        # Cancel all running tasks first using preset function in task_service.py --- set cancel flag in Redis
         try:
             cancel_all_task_of(doc.id)
             logging.info(f"Cancelled all tasks for document {doc.id}")
@@ -765,7 +755,8 @@ class DocumentService(CommonService):
 
         # 步骤 4: 删除 chunk 图片（非关键操作，记录后继续）
         try:
-            cls.delete_chunk_images(doc, tenant_id)
+            if chunk_index_exists:
+                cls.delete_chunk_images(doc, tenant_id)
         except Exception as e:
             logging.warning(f"Failed to delete chunk images for document {doc.id}: {e}")
 
@@ -780,7 +771,7 @@ class DocumentService(CommonService):
 
         # 步骤 6: 从文档存储删除所有 chunks（关键操作，记录错误）
         try:
-            settings.docStoreConn.delete({"doc_id": doc.id}, search.index_name(tenant_id), doc.kb_id)
+            settings.docStoreConn.delete({"doc_id": doc.id}, chunk_index_name, doc.kb_id)
         except Exception as e:
             logging.error(f"Failed to delete chunks from doc store for document {doc.id}: {e}")
 
@@ -792,29 +783,24 @@ class DocumentService(CommonService):
 
         # 步骤 8: 清理知识图谱引用（非关键操作，记录后继续）
         try:
-            # 查询包含该文档引用的知识图谱
-            graph_source = settings.docStoreConn.get_fields(
-                settings.docStoreConn.search(["source_id"], [], {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, search.index_name(tenant_id), [doc.kb_id]),
-                ["source_id"],
-            )
-
-            # 如果知识图谱引用了该文档，则清理引用
-            if len(graph_source) > 0 and doc.id in list(graph_source.values())[0]["source_id"]:
-                # 移除实体、关系等中的 source_id 引用
-                settings.docStoreConn.update(
-                    {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc.id},
-                    {"remove": {"source_id": doc.id}},
-                    search.index_name(tenant_id),
-                    doc.kb_id,
+            if chunk_index_exists:
+                graph_source = settings.docStoreConn.get_fields(
+                    settings.docStoreConn.search(["source_id"], [], {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]}, [], OrderByExpr(), 0, 1, chunk_index_name, [doc.kb_id]),
+                    ["source_id"],
                 )
-                # 标记知识图谱为已修改
-                settings.docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]}, {"removed_kwd": "Y"}, search.index_name(tenant_id), doc.kb_id)
-                # 删除没有 source_id 的孤立节点
-                settings.docStoreConn.delete(
-                    {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
-                    search.index_name(tenant_id),
-                    doc.kb_id,
-                )
+                if len(graph_source) > 0 and doc.id in list(graph_source.values())[0]["source_id"]:
+                    settings.docStoreConn.update(
+                        {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "source_id": doc.id},
+                        {"remove": {"source_id": doc.id}},
+                        chunk_index_name,
+                        doc.kb_id,
+                    )
+                    settings.docStoreConn.update({"kb_id": doc.kb_id, "knowledge_graph_kwd": ["graph"]}, {"removed_kwd": "Y"}, chunk_index_name, doc.kb_id)
+                    settings.docStoreConn.delete(
+                        {"kb_id": doc.kb_id, "knowledge_graph_kwd": ["entity", "relation", "graph", "subgraph", "community_report"], "must_not": {"exists": "source_id"}},
+                        chunk_index_name,
+                        doc.kb_id,
+                    )
         except Exception as e:
             logging.warning(f"Failed to cleanup knowledge graph for document {doc.id}: {e}")
 
@@ -971,84 +957,84 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def increment_chunk_num(cls, doc_id, kb_id, token_num, chunk_num, duration):
-        """
-        递增文档和知识库的 token_num、chunk_num，累加处理时长
-
-        逻辑说明：
-        1. 更新文档的 token_num、chunk_num、process_duration
-        2. 如果文档不存在，记录警告
-        3. 更新知识库的 token_num、chunk_num
-
-        :param doc_id: 文档 ID
-        :param kb_id: 知识库 ID
-        :param token_num: 要增加的 token 数量
-        :param chunk_num: 要增加的 chunk 数量
-        :param duration: 要累加的处理时长
-        :return: 受影响的行数
-        """
-        # 更新文档的计数和处理时长
-        num = (
-            cls.model.update(
-                token_num=cls.model.token_num + token_num,
-                chunk_num=cls.model.chunk_num + chunk_num,
-                process_duration=cls.model.process_duration + duration
+        """Atomically add chunk/token counters on the document and its knowledge base."""
+        with DB.atomic():
+            num = (
+                cls.model.update(
+                    token_num=cls.model.token_num + token_num,
+                    chunk_num=cls.model.chunk_num + chunk_num,
+                    process_duration=cls.model.process_duration + duration,
+                )
+                .where((cls.model.id == doc_id) & (cls.model.kb_id == kb_id))
+                .execute()
             )
-            .where(cls.model.id == doc_id)
-            .execute()
-        )
-
-        # 如果文档不存在，记录警告
-        if num == 0:
-            logging.warning("Document not found which is supposed to be there")
-
-        # 更新知识库的计数
-        num = Knowledgebase.update(
-            token_num=Knowledgebase.token_num + token_num,
-            chunk_num=Knowledgebase.chunk_num + chunk_num
-        ).where(Knowledgebase.id == kb_id).execute()
-
+            if num == 0:
+                logging.error(
+                    "increment_chunk_num: no document matched doc_id=%s kb_id=%s "
+                    "token_num=%s chunk_num=%s duration=%s",
+                    doc_id,
+                    kb_id,
+                    token_num,
+                    chunk_num,
+                    duration,
+                )
+                raise LookupError("Document not found which is supposed to be there")
+            num = (
+                Knowledgebase.update(
+                    token_num=Knowledgebase.token_num + token_num,
+                    chunk_num=Knowledgebase.chunk_num + chunk_num,
+                )
+                .where(Knowledgebase.id == kb_id)
+                .execute()
+            )
+            if num == 0:
+                logging.error(
+                    "increment_chunk_num: no knowledgebase matched kb_id=%s for doc_id=%s "
+                    "token_num=%s chunk_num=%s duration=%s",
+                    kb_id,
+                    doc_id,
+                    token_num,
+                    chunk_num,
+                    duration,
+                )
+                raise LookupError("Knowledgebase not found which is supposed to be there")
         return num
 
     @classmethod
     @DB.connection_context()
     def decrement_chunk_num(cls, doc_id, kb_id, token_num, chunk_num, duration):
-        """
-        递减文档和知识库的 token_num、chunk_num（重新解析时使用），累加处理时长
-
-        逻辑说明：
-        1. 更新文档的 token_num、chunk_num、process_duration
-        2. 如果文档不存在，抛出异常
-        3. 更新知识库的 token_num、chunk_num
-
-        :param doc_id: 文档 ID
-        :param kb_id: 知识库 ID
-        :param token_num: 要减少的 token 数量
-        :param chunk_num: 要减少的 chunk 数量
-        :param duration: 要累加的处理时长
-        :return: 受影响的行数
-        :raises LookupError: 文档不存在时
-        """
-        # 更新文档的计数和处理时长
-        num = (
-            cls.model.update(
-                token_num=cls.model.token_num - token_num,
-                chunk_num=cls.model.chunk_num - chunk_num,
-                process_duration=cls.model.process_duration + duration
+        """Atomically subtract chunk/token counters on the document and its knowledge base."""
+        with DB.atomic():
+            num = (
+                cls.model.update(
+                    token_num=cls.model.token_num - token_num,
+                    chunk_num=cls.model.chunk_num - chunk_num,
+                    process_duration=cls.model.process_duration + duration,
+                )
+                .where((cls.model.id == doc_id) & (cls.model.kb_id == kb_id))
+                .execute()
             )
-            .where(cls.model.id == doc_id)
-            .execute()
-        )
-
-        # 如果文档不存在，抛出异常
-        if num == 0:
-            raise LookupError("Document not found which is supposed to be there")
-
-        # 更新知识库的计数
-        num = Knowledgebase.update(
-            token_num=Knowledgebase.token_num - token_num,
-            chunk_num=Knowledgebase.chunk_num - chunk_num
-        ).where(Knowledgebase.id == kb_id).execute()
-
+            if num == 0:
+                raise LookupError("Document not found which is supposed to be there")
+            num = (
+                Knowledgebase.update(
+                    token_num=Knowledgebase.token_num - token_num,
+                    chunk_num=Knowledgebase.chunk_num - chunk_num,
+                )
+                .where(Knowledgebase.id == kb_id)
+                .execute()
+            )
+            if num == 0:
+                logging.error(
+                    "decrement_chunk_num: no knowledgebase matched kb_id=%s for doc_id=%s "
+                    "token_num=%s chunk_num=%s duration=%s",
+                    kb_id,
+                    doc_id,
+                    token_num,
+                    chunk_num,
+                    duration,
+                )
+                raise LookupError("Knowledgebase not found which is supposed to be there")
         return num
 
     @classmethod
@@ -1118,7 +1104,7 @@ class DocumentService(CommonService):
         :return: 受影响的行数
         """
         doc = cls.model.get_by_id(doc_id)
-        assert doc, "Can't fine document in database."
+        assert doc, "Can't find document in database."
 
         num = (
             Knowledgebase.update(
@@ -1147,7 +1133,7 @@ class DocumentService(CommonService):
         :return: 受影响的行数
         """
         doc = cls.model.get_by_id(doc_id)
-        assert doc, "Can't fine document in database."
+        assert doc, "Can't find document in database."
 
         num = (
             Knowledgebase.update(
@@ -1239,33 +1225,10 @@ class DocumentService(CommonService):
     @classmethod
     @DB.connection_context()
     def accessible(cls, doc_id, user_id):
-        """
-        检查用户是否有权访问该文档
-
-        用户需属于文档所在知识库的租户。
-
-        逻辑说明：
-        1. 关联知识库和用户租户关系表
-        2. 按文档 ID 和用户 ID 过滤
-        3. 如果有结果，返回 True；否则返回 False
-
-        :param doc_id: 文档 ID
-        :param user_id: 用户 ID
-        :return: 是否有访问权限
-        """
-        docs = (
-            cls.model.select(cls.model.id)
-            .join(Knowledgebase, on=(Knowledgebase.id == cls.model.kb_id))
-            .join(UserTenant, on=(UserTenant.tenant_id == Knowledgebase.tenant_id))
-            .where(cls.model.id == doc_id, UserTenant.user_id == user_id)
-            .paginate(0, 1)
-        )
-        docs = docs.dicts()
-
-        if not docs:
+        e, doc = cls.get_by_id(doc_id)
+        if not e:
             return False
-
-        return True
+        return KnowledgebaseService.accessible(doc.kb_id, user_id)
 
     @classmethod
     @DB.connection_context()
@@ -1926,7 +1889,7 @@ class DocumentService(CommonService):
             queue_tasks(doc, bucket, name, 0)
 
 
-def queue_raptor_o_graphrag_tasks(sample_doc_id, ty, priority, fake_doc_id="", doc_ids=[]):
+def queue_raptor_o_graphrag_tasks(sample_doc, ty, priority, fake_doc_id="", doc_ids=None):
     """
     创建 GraphRAG / RAPTOR / Mindmap 后处理任务并推入 Redis 队列
 
@@ -1952,23 +1915,21 @@ def queue_raptor_o_graphrag_tasks(sample_doc_id, ty, priority, fake_doc_id="", d
     :return: 任务 ID
     :raises AssertionError: 任务类型不正确时
     """
+    if doc_ids is None:
+        doc_ids = []
     assert ty in ["graphrag", "raptor", "mindmap"], "type should be graphrag, raptor or mindmap"
 
-    # 获取分块配置
-    chunking_config = DocumentService.get_chunking_config(sample_doc_id["id"])
-
-    # 使用 xxhash 生成任务摘要
+    chunking_config = DocumentService.get_chunking_config(sample_doc["id"])
     hasher = xxhash.xxh64()
     for field in sorted(chunking_config.keys()):
         hasher.update(str(chunking_config[field]).encode("utf-8"))
 
     def new_task():
-        """构建一个新的后处理任务字典模板"""
         return {
             "id": get_uuid(),
-            "doc_id": sample_doc_id["id"],
-            "from_page": 100000000,
-            "to_page": 100000000,
+            "doc_id": fake_doc_id,
+            "from_page": MAXIMUM_TASK_PAGE_NUMBER,
+            "to_page": MAXIMUM_TASK_PAGE_NUMBER,
             "task_type": ty,
             "progress_msg": datetime.now().strftime("%H:%M:%S") + " created task " + ty,
             "begin_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1984,278 +1945,14 @@ def queue_raptor_o_graphrag_tasks(sample_doc_id, ty, priority, fake_doc_id="", d
     # 插入任务到数据库
     bulk_insert_into_db(Task, [task], True)
 
-    # 设置 fake_doc_id 和 doc_ids
-    task["doc_id"] = fake_doc_id  # 用 fake_doc_id 替换实际 doc_id（绕过 KB 级别限制）
-    task["doc_ids"] = doc_ids  # 记录实际参与任务的文档 ID 列表
-
-    # 标记文档开始解析（保持进度不重置）
-    DocumentService.begin2parse(sample_doc_id["id"], keep_progress=True)
-
-    # 将任务推入 Redis 队列
-    assert REDIS_CONN.queue_product(settings.get_svr_queue_name(priority), message=task), "Can't access Redis. Please check the Redis' status."
-
+    task["doc_ids"] = doc_ids
+    DocumentService.begin2parse(task["doc_id"], keep_progress=True)
+    assert REDIS_CONN.queue_product(settings.get_svr_queue_name(priority, ty), message=task), "Can't access Redis. Please check the Redis' status."
     return task["id"]
 
 
-def get_queue_length(priority):
-    """
-    查询指定优先级的 Redis 队列中待处理消息数量（lag）
-
-    逻辑说明：
-        1. 获取队列信息
-        2. 从队列信息中提取 lag 值
-        3. 返回 lag 值（待处理消息数量）
-
-    :param priority: 队列优先级
-    :return: 待处理消息数量
-    """
-    group_info = REDIS_CONN.queue_info(settings.get_svr_queue_name(priority), SVR_CONSUMER_GROUP_NAME)
+def get_queue_length(priority, suffix="common"):
+    group_info = REDIS_CONN.queue_info(settings.get_svr_queue_name(priority, suffix), SVR_CONSUMER_GROUP_NAME)
     if not group_info:
         return 0
     return int(group_info.get("lag", 0) or 0)
-
-
-def doc_upload_and_parse(conversation_id, file_objs, user_id):
-    """
-    在对话上下文中上传文件并同步解析
-
-    流程：
-    1. 通过会话 ID 找到关联的知识库和 embedding 模型
-    2. 上传文件并创建文档记录
-    3. 使用线程池并发执行文件分块（支持多种解析器）
-    4. 对非图片文档生成思维导图（MindMap）
-    5. 对所有 chunks 进行 embedding 并批量写入 ES/Infinity
-    6. 更新文档的 chunk/token 计数
-
-    逻辑说明：
-    1. 查找会话（支持普通会话和 API 会话）
-    2. 获取对话关联的第一个知识库
-    3. 获取 embedding 模型配置
-    4. 上传文件到知识库
-    5. 根据文档类型选择解析器
-    6. 使用线程池并发执行文件分块
-    7. 处理分块结果（含图片的 chunk 存储到对象存储）
-    8. 对非图片文档生成思维导图
-    9. 对所有 chunks 进行 embedding
-    10. 批量写入文档存储
-    11. 更新文档的计数
-
-    :param conversation_id: 会话 ID
-    :param file_objs: 文件对象列表
-    :param user_id: 用户 ID
-    :return: 所有新创建的文档 ID 列表
-    """
-    from api.db.services.api_service import API4ConversationService
-    from api.db.services.conversation_service import ConversationService
-    from api.db.services.dialog_service import DialogService
-    from api.db.services.file_service import FileService
-    from api.db.services.llm_service import LLMBundle
-    from api.db.services.user_service import TenantService
-    from api.db.joint_services.tenant_model_service import get_model_config_by_id, get_model_config_by_type_and_name, get_tenant_default_model_by_type
-    from rag.app import audio, email, naive, picture, presentation
-
-    # 查找会话（支持普通会话和 API 会话）
-    e, conv = ConversationService.get_by_id(conversation_id)
-    if not e:
-        e, conv = API4ConversationService.get_by_id(conversation_id)
-    assert e, "Conversation not found!"
-
-    # 获取对话关联的第一个知识库
-    e, dia = DialogService.get_by_id(conv.dialog_id)
-    if not dia.kb_ids:
-        raise LookupError("No dataset associated with this conversation. Please add a dataset before uploading documents")
-    kb_id = dia.kb_ids[0]
-
-    # 获取知识库信息
-    e, kb = KnowledgebaseService.get_by_id(kb_id)
-    if not e:
-        raise LookupError("Can't find this dataset!")
-
-    # 获取 embedding 模型配置
-    if kb.tenant_embd_id:
-        embd_model_config = get_model_config_by_id(kb.tenant_embd_id)
-    else:
-        embd_model_config = get_model_config_by_type_and_name(kb.tenant_id, LLMType.EMBEDDING, kb.embd_id)
-    embd_mdl = LLMBundle(kb.tenant_id, embd_model_config, lang=kb.language)
-
-    # 上传文件到知识库
-    err, files = FileService.upload_document(kb, file_objs, user_id)
-    assert not err, "\n".join(err)
-
-    def dummy(prog=None, msg=""):
-        """空回调函数"""
-        pass
-
-    # 解析器工厂映射：根据文档类型选择对应的解析模块
-    FACTORY = {
-        ParserType.PRESENTATION.value: presentation,
-        ParserType.PICTURE.value: picture,
-        ParserType.AUDIO.value: audio,
-        ParserType.EMAIL.value: email
-    }
-
-    # 默认解析器配置
-    parser_config = {
-        "chunk_token_num": 4096,
-        "delimiter": "\n!?;。；！？",
-        "layout_recognize": "Plain Text",
-        "table_context_size": 0,
-        "image_context_size": 0
-    }
-
-    # 创建线程池（最大 12 个工作线程）
-    exe = ThreadPoolExecutor(max_workers=12)
-    threads = []
-
-    # 收集文档名称
-    doc_nm = {}
-    for d, blob in files:
-        doc_nm[d["id"]] = d["name"]
-
-    # 使用线程池并发执行文件分块
-    for d, blob in files:
-        kwargs = {
-            "callback": dummy,
-            "parser_config": parser_config,
-            "from_page": 0,
-            "to_page": 100000,
-            "tenant_id": kb.tenant_id,
-            "lang": kb.language
-        }
-        threads.append(exe.submit(FACTORY.get(d["parser_id"], naive).chunk, d["name"], blob, **kwargs))
-
-    # 收集分块结果
-    docs = []
-    for (docinfo, _), th in zip(files, threads):
-        # 处理含图片的 chunk：将图片存储到对象存储并替换为 img_id 引用
-        doc = {"doc_id": docinfo["id"], "kb_id": [kb.id]}
-
-        for ck in th.result():
-            d = deepcopy(doc)
-            d.update(ck)
-
-            # 生成 chunk ID（使用 xxhash）
-            d["id"] = xxhash.xxh64((ck["content_with_weight"] + str(d["doc_id"])).encode("utf-8")).hexdigest()
-
-            # 设置时间戳
-            d["create_time"] = str(datetime.now()).replace("T", " ")[:19]
-            d["create_timestamp_flt"] = datetime.now().timestamp()
-
-            # 处理不包含图片的 chunk
-            if not d.get("image"):
-                docs.append(d)
-                continue
-
-            # 处理包含图片的 chunk
-            output_buffer = BytesIO()
-            if isinstance(d["image"], bytes):
-                output_buffer = BytesIO(d["image"])
-            else:
-                d["image"].save(output_buffer, format="JPEG")
-
-            # 存储图片到对象存储
-            settings.STORAGE_IMPL.put(kb.id, d["id"], output_buffer.getvalue())
-            d["img_id"] = "{}-{}".format(kb.id, d["id"])
-            d.pop("image", None)
-            docs.append(d)
-
-    # 收集解析器类型和文档 ID
-    parser_ids = {d["id"]: d["parser_id"] for d, _ in files}
-    docids = [d["id"] for d, _ in files]
-
-    # 初始化计数器
-    chunk_counts = {id: 0 for id in docids}
-    token_counts = {id: 0 for id in docids}
-    es_bulk_size = 64  # ES 批量插入大小
-
-    def embedding(doc_id, cnts, batch_size=16):
-        """
-        对一批文本内容进行 embedding，返回向量列表，同时统计 chunk 和 token 数量
-
-        逻辑说明：
-        1. 分批进行 embedding（每批 batch_size 个）
-        2. 累加 chunk 数量和 token 数量
-        3. 返回向量列表
-        """
-        nonlocal embd_mdl, chunk_counts, token_counts
-        vectors = []
-
-        for i in range(0, len(cnts), batch_size):
-            # 对一批文本进行 encoding
-            vts, c = embd_mdl.encode(cnts[i : i + batch_size])
-            vectors.extend(vts.tolist())
-
-            # 累加计数
-            chunk_counts[doc_id] += len(cnts[i : i + batch_size])
-            token_counts[doc_id] += c
-
-        return vectors
-
-    # 获取索引名称
-    idxnm = search.index_name(kb.tenant_id)
-    try_create_idx = True
-
-    # 获取租户 LLM 配置（用于生成思维导图）
-    _, tenant = TenantService.get_by_id(kb.tenant_id)
-    tenant_llm_config = get_tenant_default_model_by_type(kb.tenant_id, LLMType.CHAT)
-    llm_bdl = LLMBundle(kb.tenant_id, tenant_llm_config)
-
-    # 处理每个文档
-    for doc_id in docids:
-        # 获取该文档的所有 chunks
-        cks = [c for c in docs if c["doc_id"] == doc_id]
-
-        # 对非图片文档生成思维导图（使用 LLM 抽取）
-        if parser_ids[doc_id] != ParserType.PICTURE.value:
-            from rag.graphrag.general.mind_map_extractor import MindMapExtractor
-
-            mindmap = MindMapExtractor(llm_bdl)
-            try:
-                # 生成思维导图
-                mind_map = asyncio.run(mindmap([c["content_with_weight"] for c in docs if c["doc_id"] == doc_id]))
-                mind_map = json.dumps(mind_map.output, ensure_ascii=False, indent=2)
-
-                # 检查思维导图内容是否过少
-                if len(mind_map) < 32:
-                    raise Exception("Few content: " + mind_map)
-
-                # 添加思维导图作为一个特殊的 chunk
-                cks.append(
-                    {
-                        "id": get_uuid(),
-                        "doc_id": doc_id,
-                        "kb_id": [kb.id],
-                        "docnm_kwd": doc_nm[doc_id],
-                        "title_tks": rag_tokenizer.tokenize(re.sub(r"\.[a-zA-Z]+$", "", doc_nm[doc_id])),
-                        "content_ltks": rag_tokenizer.tokenize("summary summarize 总结 概况 file 文件 概括"),
-                        "content_with_weight": mind_map,
-                        "knowledge_graph_kwd": "mind_map",
-                    }
-                )
-            except Exception:
-                logging.exception("Mind map generation error")
-
-        # 对所有 chunks 进行 embedding
-        vectors = embedding(doc_id, [c["content_with_weight"] for c in cks])
-        assert len(cks) == len(vectors)
-
-        # 将 embedding 向量附加到每个 chunk
-        for i, d in enumerate(cks):
-            v = vectors[i]
-            d["q_%d_vec" % len(v)] = v
-
-        # 批量写入文档存储（ES/Infinity）
-        for b in range(0, len(cks), es_bulk_size):
-            if try_create_idx:
-                # 首次写入时创建索引
-                if not settings.docStoreConn.index_exist(idxnm, kb_id):
-                    settings.docStoreConn.create_idx(idxnm, kb_id, len(vectors[0]), kb.parser_id)
-                try_create_idx = False
-
-            # 批量插入 chunks
-            settings.docStoreConn.insert(cks[b : b + es_bulk_size], idxnm, kb_id)
-
-        # 更新文档的 chunk/token 计数
-        DocumentService.increment_chunk_num(doc_id, kb.id, token_counts[doc_id], chunk_counts[doc_id], 0)
-
-    return [d["id"] for d, _ in files]

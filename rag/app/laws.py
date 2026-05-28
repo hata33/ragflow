@@ -42,7 +42,7 @@ import re
 from io import BytesIO
 from docx import Document
 
-from common.constants import ParserType
+from common.constants import ParserType, MAXIMUM_PAGE_NUMBER
 from deepdoc.parser.utils import get_text
 from rag.nlp import bullets_category, remove_contents_table, make_colon_as_title, tokenize_chunks, docx_question_level, tree_merge
 from rag.nlp import rag_tokenizer, Node
@@ -77,7 +77,7 @@ class Docx(DocxParser):
         line = re.sub(r"\u3000", " ", line).strip()
         return line
 
-    def old_call(self, filename, binary=None, from_page=0, to_page=100000):
+    def old_call(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER):
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0
         lines = []
@@ -94,7 +94,7 @@ class Docx(DocxParser):
                     pn += 1
         return [line for line in lines if line]
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000):
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER):
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0
         lines = []
@@ -143,28 +143,10 @@ class Pdf(PdfParser):
     """
 
     def __init__(self):
-        self.model_speciess = ParserType.LAWS.value
+        self.model_species = ParserType.LAWS.value
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None):
-        """
-        解析 PDF 文档
-
-        执行 OCR 和布局分析，提取文本内容。
-
-        Args:
-            filename: PDF 文件名或路径
-            binary: PDF 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-            zoomin: 图片放大倍数（默认 3）
-            callback: 进度回调函数
-
-        Returns:
-            tuple: (sections, tables)
-                - sections: 文本段落列表
-                - tables: 表格列表（始终为 None）
-        """
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, zoomin=3, callback=None):
         from timeit import default_timer as timer
 
         start = timer()
@@ -183,7 +165,7 @@ class Pdf(PdfParser):
         return [(b["text"], self._line_tag(b, zoomin)) for b in self.boxes], None
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=None, **kwargs):
     """
     解析法律文档并分块
 

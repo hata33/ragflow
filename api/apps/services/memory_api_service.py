@@ -27,12 +27,56 @@ from api.db.services.canvas_service import UserCanvasService
 from api.db.services.task_service import TaskService
 from api.db.joint_services.memory_message_service import get_memory_size_cache, judge_system_prompt_is_default, queue_save_to_memory_task, query_message
 from api.utils.memory_utils import format_ret_data_from_memory, get_memory_type_human
+from api.utils.tenant_utils import ensure_tenant_model_id_for_params
 from api.constants import MEMORY_NAME_LIMIT, MEMORY_SIZE_LIMIT
 from memory.services.messages import MessageService
 from memory.utils.prompt_util import PromptAssembler
-from common.constants import MemoryType, ForgettingPolicy
+from common.constants import MemoryType, ForgettingPolicy, LLMType
 from common.exceptions import ArgumentException, NotFoundException
 from common.time_utils import current_timestamp, timestamp_to_date
+
+
+def _split_filter_values(values):
+    if not values:
+        return []
+    if isinstance(values, str):
+        values = [values]
+    res = []
+    for value in values:
+        if not value:
+            continue
+        if isinstance(value, str):
+            res.extend([v.strip() for v in value.split(",") if v.strip()])
+        else:
+            res.append(value)
+    return res
+
+
+def _joined_tenant_ids(user_id: str) -> set[str]:
+    user_tenants = UserTenantService.get_user_tenant_relation_by_user_id(user_id)
+    return {user_id, *[tenant["tenant_id"] for tenant in user_tenants]}
+
+
+def _memory_accessible(memory) -> bool:
+    if memory.tenant_id == current_user.id:
+        return True
+    if memory.permissions != TenantPermission.TEAM.value:
+        return False
+    return memory.tenant_id in _joined_tenant_ids(current_user.id)
+
+
+def _require_memory_access(memory_id: str):
+    memory = MemoryService.get_by_memory_id(memory_id)
+    if not memory or not _memory_accessible(memory):
+        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    return memory
+
+
+def _filter_accessible_memories(memory_ids: list[str]):
+    memory_ids = _split_filter_values(memory_ids)
+    if not memory_ids:
+        return []
+    return [memory for memory in MemoryService.get_by_ids(memory_ids) if _memory_accessible(memory)]
 
 
 async def create_memory(memory_info: dict):
@@ -102,6 +146,9 @@ async def update_memory(memory_id: str, new_memory_setting: dict):
     Returns:
         (成功标志, 记忆信息) 或 (成功标志, 错误信息)
     """
+    current_memory = _require_memory_access(memory_id)
+    owner_tenant_id = current_memory.tenant_id
+
     update_dict = {}
     # check name length
     if "name" in new_memory_setting:
@@ -117,14 +164,32 @@ async def update_memory(memory_id: str, new_memory_setting: dict):
         if new_memory_setting["permissions"] not in [e.value for e in TenantPermission]:
             raise ArgumentException(f"Unknown permission '{new_memory_setting['permissions']}'.")
         update_dict["permissions"] = new_memory_setting["permissions"]
-    if new_memory_setting.get("llm_id"):
-        update_dict["llm_id"] = new_memory_setting["llm_id"]
-    if new_memory_setting.get("embd_id"):
-        update_dict["embd_id"] = new_memory_setting["embd_id"]
-    if new_memory_setting.get("tenant_llm_id"):
-        update_dict["tenant_llm_id"] = new_memory_setting["tenant_llm_id"]
-    if new_memory_setting.get("tenant_embd_id"):
-        update_dict["tenant_embd_id"] = new_memory_setting["tenant_embd_id"]
+    if ("tenant_llm_id" in new_memory_setting or "tenant_embd_id" in new_memory_setting) and not (
+        new_memory_setting.get("llm_id") or new_memory_setting.get("embd_id")
+    ):
+        raise ArgumentException(
+            "Do not set tenant_llm_id or tenant_embd_id directly; update llm_id and/or embd_id instead."
+        )
+    if new_memory_setting.get("llm_id") or new_memory_setting.get("embd_id"):
+        merged = {
+            "llm_id": new_memory_setting.get("llm_id") or current_memory.llm_id,
+            "embd_id": new_memory_setting.get("embd_id") or current_memory.embd_id,
+        }
+        merged = ensure_tenant_model_id_for_params(owner_tenant_id, merged)
+        if not merged.get("tenant_llm_id"):
+            raise ArgumentException(
+                f"Tenant Model with name {merged['llm_id']} and type {LLMType.CHAT.value} not found"
+            )
+        if new_memory_setting.get("embd_id") and not merged.get("tenant_embd_id"):
+            raise ArgumentException(
+                f"Tenant Model with name {merged['embd_id']} and type {LLMType.EMBEDDING.value} not found"
+            )
+        if new_memory_setting.get("llm_id"):
+            update_dict["llm_id"] = merged["llm_id"]
+        if new_memory_setting.get("embd_id"):
+            update_dict["embd_id"] = merged["embd_id"]
+        update_dict["tenant_llm_id"] = merged["tenant_llm_id"]
+        update_dict["tenant_embd_id"] = merged.get("tenant_embd_id")
     if new_memory_setting.get("memory_type"):
         memory_type = set(new_memory_setting["memory_type"])
         invalid_type = memory_type - {e.name.lower() for e in MemoryType}
@@ -151,9 +216,6 @@ async def update_memory(memory_id: str, new_memory_setting: dict):
     for field in ["avatar", "description", "system_prompt", "user_prompt"]:
         if field in new_memory_setting:
             update_dict[field] = new_memory_setting[field]
-    current_memory = MemoryService.get_by_memory_id(memory_id)
-    if not current_memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
 
     memory_dict = current_memory.to_dict()
     memory_dict.update({"memory_type": get_memory_type_human(current_memory.memory_type)})
@@ -182,9 +244,7 @@ async def update_memory(memory_id: str, new_memory_setting: dict):
 
 
 async def delete_memory(memory_id):
-    memory = MemoryService.get_by_memory_id(memory_id)
-    if not memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    memory = _require_memory_access(memory_id)
     MemoryService.delete_memory(memory_id)
     if MessageService.has_index(memory.tenant_id, memory_id):
         MessageService.delete_message({"memory_id": memory_id}, memory.tenant_id, memory_id)
@@ -206,19 +266,16 @@ async def list_memory(filter_params: dict, keywords: str, page: int=1, page_size
     Returns:
         包含记忆列表和总数的字典
     """
-    filter_dict: dict = {"storage_type": filter_params.get("storage_type")}
-    tenant_ids = filter_params.get("tenant_id")
-    if not filter_params.get("tenant_id"):
-        # restrict to current user's tenants
-        user_tenants = UserTenantService.get_user_tenant_relation_by_user_id(current_user.id)
-        filter_dict["tenant_id"] = [tenant["tenant_id"] for tenant in user_tenants]
+    filter_dict: dict = {"storage_type": filter_params.get("storage_type"), "accessible_user_id": current_user.id}
+    allowed_tenant_ids = _joined_tenant_ids(current_user.id)
+    tenant_ids = _split_filter_values(filter_params.get("tenant_id") or filter_params.get("owner_ids"))
+    if tenant_ids:
+        filter_dict["tenant_id"] = [tenant_id for tenant_id in tenant_ids if tenant_id in allowed_tenant_ids]
+        if not filter_dict["tenant_id"]:
+            return {"memory_list": [], "total_count": 0}
     else:
-        if len(tenant_ids) == 1 and ',' in tenant_ids[0]:
-            tenant_ids = tenant_ids[0].split(',')
-        filter_dict["tenant_id"] = tenant_ids
-    memory_types = filter_params.get("memory_type")
-    if memory_types and len(memory_types) == 1 and ',' in memory_types[0]:
-        memory_types = memory_types[0].split(',')
+        filter_dict["tenant_id"] = list(allowed_tenant_ids)
+    memory_types = _split_filter_values(filter_params.get("memory_type"))
     filter_dict["memory_type"] = memory_types
 
     memory_list, count = MemoryService.get_by_filter(filter_dict, keywords, page, page_size)
@@ -230,27 +287,13 @@ async def list_memory(filter_params: dict, keywords: str, page: int=1, page_size
 
 async def get_memory_config(memory_id):
     memory = MemoryService.get_with_owner_name_by_id(memory_id)
-    if not memory:
+    if not memory or not _memory_accessible(memory):
         raise NotFoundException(f"Memory '{memory_id}' not found.")
     return format_ret_data_from_memory(memory)
 
 
 async def get_memory_messages(memory_id, agent_ids: list[str], keywords: str, page: int=1, page_size: int = 50):
-    """获取记忆的消息列表
-
-    Args:
-        memory_id: 记忆 ID
-        agent_ids: Agent ID 列表
-        keywords: 关键词
-        page: 页码
-        page_size: 每页大小
-
-    Returns:
-        包含消息列表和存储类型的字典
-    """
-    memory = MemoryService.get_by_memory_id(memory_id)
-    if not memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    memory = _require_memory_access(memory_id)
     messages = MessageService.list_message(
         memory.tenant_id, memory_id, agent_ids, keywords, page, page_size)
     agent_name_mapping = {}
@@ -287,13 +330,14 @@ async def add_message(memory_ids: list[str], message_dict: dict):
     Returns:
         添加结果
     """
-    return await queue_save_to_memory_task(memory_ids, message_dict)
+    accessible_memory_ids = [memory.id for memory in _filter_accessible_memories(memory_ids)]
+    if not accessible_memory_ids:
+        return False, "Memory not found."
+    return await queue_save_to_memory_task(accessible_memory_ids, message_dict)
 
 
 async def forget_message(memory_id: str, message_id: int):
-    memory = MemoryService.get_by_memory_id(memory_id)
-    if not memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    memory = _require_memory_access(memory_id)
 
     forget_time = timestamp_to_date(current_timestamp())
     update_succeed = MessageService.update_message(
@@ -306,9 +350,7 @@ async def forget_message(memory_id: str, message_id: int):
 
 
 async def update_message_status(memory_id: str, message_id: int, status: bool):
-    memory = MemoryService.get_by_memory_id(memory_id)
-    if not memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    memory = _require_memory_access(memory_id)
 
     update_succeed = MessageService.update_message(
         {"memory_id": memory_id, "message_id": int(message_id)},
@@ -337,6 +379,11 @@ async def search_message(filter_dict: dict, params: dict):
     Returns:
         搜索结果
     """
+    memory_ids = _split_filter_values(filter_dict.get("memory_id"))
+    accessible_memory_ids = [memory.id for memory in _filter_accessible_memories(memory_ids)]
+    if not accessible_memory_ids:
+        return []
+    filter_dict = {**filter_dict, "memory_id": accessible_memory_ids}
     return query_message(filter_dict, params)
 
 
@@ -352,11 +399,14 @@ async def get_messages(memory_ids: list[str], agent_id: str = "", session_id: st
     Returns:
         最近的消息列表
     """
-    memory_list = MemoryService.get_by_ids(memory_ids)
+    memory_list = _filter_accessible_memories(memory_ids)
+    if not memory_list:
+        return []
     uids = [memory.tenant_id for memory in memory_list]
+    accessible_memory_ids = [memory.id for memory in memory_list]
     res = MessageService.get_recent_messages(
         uids,
-        memory_ids,
+        accessible_memory_ids,
         agent_id,
         session_id,
         limit
@@ -377,9 +427,7 @@ async def get_message_content(memory_id: str, message_id: int):
     Raises:
         NotFoundException: 当记忆或消息不存在时抛出
     """
-    memory = MemoryService.get_by_memory_id(memory_id)
-    if not memory:
-        raise NotFoundException(f"Memory '{memory_id}' not found.")
+    memory = _require_memory_access(memory_id)
 
     res = MessageService.get_by_message_id(memory_id, message_id, memory.tenant_id)
     if res:

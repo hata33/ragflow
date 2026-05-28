@@ -23,6 +23,7 @@
 - 与对话助手的交互
 """
 import time
+import logging
 from uuid import uuid4
 from common.constants import StatusEnum
 from api.db.db_models import Conversation, DB
@@ -33,6 +34,9 @@ from common.misc_utils import get_uuid
 import json
 
 from rag.prompts.generator import chunks_format
+
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationService(CommonService):
@@ -268,24 +272,23 @@ async def async_completion(tenant_id, chat_id, question, name="New session", ses
             break
         yield answer
 
-async def async_iframe_completion(dialog_id, question, session_id=None, stream=True, **kwargs):
-    """
-    异步 iframe 嵌入式对话完成
-
-    用于 iframe 嵌入场景的对话接口，使用 API 会话服务。
-    支持流式和非流式输出。
-
-    :param dialog_id: 对话助手 ID
-    :param question: 用户问题
-    :param session_id: 会话 ID（可选，不提供则创建新会话）
-    :param stream: 是否使用流式输出（默认 True）
-    :param **kwargs: 额外参数
-        - user_id: 用户 ID
-        - 其他传递给 async_chat 的参数
-    :yields: SSE 格式的数据流或单个答案字典
-    """
-    e, dia = DialogService.get_by_id(dialog_id)
-    assert e, "Dialog not found"
+async def async_iframe_completion(dialog_id, question, session_id=None, stream=True, tenant_id=None, **kwargs):
+    if tenant_id:
+        exists, dia = DialogService.get_by_id(dialog_id)
+        if (not exists
+                or getattr(dia, "tenant_id", None) != tenant_id
+                or str(getattr(dia, "status", "")) != StatusEnum.VALID.value):
+            logger.warning(
+                "Dialog lookup failed for tenant-scoped iframe completion: "
+                "tenant_id=%s dialog_id=%s required_status=%s",
+                tenant_id,
+                dialog_id,
+                StatusEnum.VALID.value,
+            )
+            raise AssertionError("Dialog not found")
+    else:
+        e, dia = DialogService.get_by_id(dialog_id)
+        assert e, "Dialog not found"
     if not session_id:
         session_id = get_uuid()
         conv = {
@@ -310,6 +313,7 @@ async def async_iframe_completion(dialog_id, question, session_id=None, stream=T
         session_id = session_id
         e, conv = API4ConversationService.get_by_id(session_id)
         assert e, "Session not found!"
+        assert conv.dialog_id == dialog_id, "Session does not belong to this dialog"
 
     if not conv.message:
         conv.message = []

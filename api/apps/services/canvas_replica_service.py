@@ -253,16 +253,7 @@ class CanvasReplicaService:
 
     @classmethod
     def load_for_run(cls, canvas_id: str, tenant_id: str, runtime_user_id: str):
-        """加载用于 /completion 的当前运行时副本
-
-        Args:
-            canvas_id: Canvas ID
-            tenant_id: 租户 ID
-            runtime_user_id: 运行时用户 ID
-
-        Returns:
-            副本负载字典，如果不存在则返回 None
-        """
+        """Load current runtime replica used by /completions."""
         replica_key = cls._replica_key(canvas_id, str(tenant_id), str(runtime_user_id))
         return cls._read_payload(replica_key)
 

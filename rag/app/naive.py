@@ -54,7 +54,7 @@ from markdown import markdown
 from PIL import Image
 from common.token_utils import num_tokens_from_string
 
-from common.constants import LLMType
+from common.constants import LLMType, MAXIMUM_PAGE_NUMBER
 from api.db.services.llm_service import LLMBundle
 from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name, get_tenant_default_model_by_type
 from rag.utils.file_utils import extract_embed_file, extract_links_from_pdf, extract_links_from_docx, extract_html
@@ -130,35 +130,7 @@ def _normalize_section_text_for_rtl_presentation_forms(sections):
     return normalized_sections
 
 
-def by_deepdoc(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
-    """
-    使用 DeepDOC 解析器解析 PDF 文档
-
-    DeepDOC 是 RAGFlow 的默认 PDF 解析器，基于 PyMuPDF 实现，
-    支持文本提取、布局分析和表格识别。
-
-    Args:
-        filename: PDF 文件名或路径
-        binary: PDF 文件的二进制内容（可选，与 filename 二选一）
-        from_page: 起始页码（默认 0）
-        to_page: 结束页码（默认 100000）
-        lang: 语言设置（默认 "Chinese"）
-        callback: 进度回调函数，格式为 callback(progress, message)
-        pdf_cls: 自定义 PDF 解析器类（可选）
-        **kwargs: 其他参数
-
-    Returns:
-        tuple: (sections, tables, pdf_parser)
-            - sections: 文本段落列表，每个元素为 (text, tag) 元组
-            - tables: 表格列表，每个表格包含 HTML 格式的表格数据
-            - pdf_parser: PDF 解析器实例
-
-    Processing Steps:
-        1. 创建 PDF 解析器实例（使用自定义类或默认的 Pdf 类）
-        2. 调用解析器提取文本和表格
-        3. 使用视觉模型增强表格内容（可选）
-        4. 返回解析结果
-    """
+def by_deepdoc(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
     callback = callback
     binary = binary
     # 创建解析器实例：优先使用传入的 pdf_cls，否则使用默认的 Pdf 类
@@ -180,7 +152,7 @@ def by_mineru(
     filename,
     binary=None,
     from_page=0,
-    to_page=100000,
+    to_page=MAXIMUM_PAGE_NUMBER,
     lang="Chinese",
     callback=None,
     pdf_cls=None,
@@ -247,7 +219,19 @@ def by_mineru(
                 ocr_model = LLMBundle(tenant_id=tenant_id, model_config=ocr_model_config, lang=lang)
                 # 获取底层模型实例
                 pdf_parser = ocr_model.mdl
-                # 执行 PDF OCR 解析
+
+                # Closes #14869: when the tenant has an IMAGE2TEXT model
+                # configured, let the MinerU parser enrich image chunks with
+                # VLM-generated semantic descriptions (parity with deepdoc's
+                # VisionFigureParser). Best-effort — fall back silently if
+                # no vision model is available.
+                if "vision_model" not in kwargs:
+                    try:
+                        vision_model_config = get_tenant_default_model_by_type(tenant_id, LLMType.IMAGE2TEXT)
+                        kwargs["vision_model"] = LLMBundle(tenant_id=tenant_id, model_config=vision_model_config, lang=lang)
+                    except Exception as vlm_err:
+                        logging.info(f"[MinerU] no IMAGE2TEXT model for tenant; skipping image VLM enhancement: {vlm_err}")
+
                 sections, tables = pdf_parser.parse_pdf(
                     filepath=filename,
                     binary=binary,
@@ -266,38 +250,7 @@ def by_mineru(
     return None, None, None
 
 
-def by_docling(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
-    """
-    使用 Docling 解析器解析 PDF 文档
-
-    Docling 是一个基于 AI 的文档理解工具，能够智能识别文档结构、
-    表格、图片等元素，适合处理复杂布局的 PDF 文档。
-
-    Args:
-        filename: PDF 文件名或路径
-        binary: PDF 文件的二进制内容（可选）
-        from_page: 起始页码（默认 0）
-        to_page: 结束页码（默认 100000）
-        lang: 语言设置（默认 "Chinese"）
-        callback: 进度回调函数
-        pdf_cls: 忽略（保留参数兼容性）
-        **kwargs: 其他参数
-            - parse_method: 解析方法（默认 "raw"）
-
-    Returns:
-        tuple: (sections, tables, pdf_parser)
-            - sections: 文本段落列表
-            - tables: 表格列表
-            - pdf_parser: DoclingParser 实例
-
-    Environment Variables:
-        - DOCLING_OUTPUT_DIR: Docling 输出目录（可选）
-        - DOCLING_DELETE_OUTPUT: 是否删除输出文件（默认 1）
-        - DOCLING_SERVER_URL: Docling 服务器 URL（可选）
-
-    Note:
-        需要先安装 Docling：pip install docling
-    """
+def by_docling(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
     pdf_parser = DoclingParser()
     parse_method = kwargs.get("parse_method", "raw")
 
@@ -320,35 +273,56 @@ def by_docling(filename, binary=None, from_page=0, to_page=100000, lang="Chinese
     return sections, tables, pdf_parser
 
 
-def by_tcadp(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
-    """
-    使用腾讯云 TCADP 解析器解析文档
+def by_opendataloader(
+    filename,
+    binary=None,
+    from_page=0,
+    to_page=MAXIMUM_PAGE_NUMBER,
+    lang="Chinese",
+    callback=None,
+    pdf_cls=None,
+    parse_method: str = "raw",
+    opendataloader_llm_name: str | None = None,
+    tenant_id: str | None = None,
+    **kwargs,
+):
+    if tenant_id:
+        if not opendataloader_llm_name:
+            try:
+                from api.db.services.tenant_llm_service import TenantLLMService
 
-    TCADP（Tencent Cloud Document Processing Parser）是腾讯云提供的
-    文档解析服务，支持 PDF、Excel 等多种格式的云端解析。
+                env_name = TenantLLMService.ensure_opendataloader_from_env(tenant_id)
+                candidates = TenantLLMService.query(tenant_id=tenant_id, llm_factory="OpenDataLoader", model_type=LLMType.OCR)
+                if candidates:
+                    opendataloader_llm_name = candidates[0].llm_name
+                elif env_name:
+                    opendataloader_llm_name = env_name
+            except Exception as e:
+                logging.warning(f"fallback to env opendataloader: {e}")
 
-    Args:
-        filename: 文件名或路径
-        binary: 文件的二进制内容（可选）
-        from_page: 起始页码（默认 0）
-        to_page: 结束页码（默认 100000）
-        lang: 语言设置（默认 "Chinese"）
-        callback: 进度回调函数
-        pdf_cls: 忽略（保留参数兼容性）
-        **kwargs: 其他参数
+        if opendataloader_llm_name:
+            try:
+                ocr_model_config = get_model_config_by_type_and_name(tenant_id, LLMType.OCR, opendataloader_llm_name)
+                ocr_model = LLMBundle(tenant_id=tenant_id, model_config=ocr_model_config, lang=lang)
+                pdf_parser = ocr_model.mdl
+                parse_options = {k: kwargs[k] for k in ("hybrid", "image_output", "sanitize") if k in kwargs}
+                sections, tables = pdf_parser.parse_pdf(
+                    filepath=filename,
+                    binary=binary,
+                    callback=callback,
+                    parse_method=parse_method,
+                    **parse_options,
+                )
+                return sections, tables, pdf_parser
+            except Exception as e:
+                logging.error(f"Failed to parse pdf via LLMBundle OpenDataLoader ({opendataloader_llm_name}): {e}")
 
-    Returns:
-        tuple: (sections, tables, tcadp_parser)
-            - sections: 文本段落列表
-            - tables: 表格列表
-            - tcadp_parser: TCADPParser 实例
+    if callback:
+        callback(-1, "OpenDataLoader not found.")
+    return None, None, None
 
-    Environment Variables:
-        - TCADP_OUTPUT_DIR: TCADP 输出目录（可选）
 
-    Note:
-        需要配置腾讯云 API 密钥和相关服务
-    """
+def by_tcadp(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=None, pdf_cls=None, **kwargs):
     tcadp_parser = TCADPParser()
 
     # 检查 TCADP 服务是否可用
@@ -365,7 +339,7 @@ def by_paddleocr(
     filename,
     binary=None,
     from_page=0,
-    to_page=100000,
+    to_page=MAXIMUM_PAGE_NUMBER,
     lang="Chinese",
     callback=None,
     pdf_cls=None,
@@ -452,40 +426,7 @@ def by_paddleocr(
     return None, None, None
 
 
-def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=None, **kwargs):
-    """
-    使用纯文本或视觉解析器解析 PDF 文档
-
-    该函数提供两种解析模式：
-    1. 纯文本模式（PlainParser）：直接提取 PDF 中的文本，速度快但无布局分析
-    2. 视觉模式（VisionParser）：使用视觉模型理解 PDF 内容，适合复杂布局
-
-    Args:
-        filename: PDF 文件名或路径
-        binary: PDF 文件的二进制内容（可选）
-        from_page: 起始页码（默认 0）
-        to_page: 结束页码（默认 100000）
-        callback: 进度回调函数
-        **kwargs: 其他参数
-            - layout_recognizer: 布局识别器名称（可选）
-                - 空字符串或 "Plain Text": 使用纯文本解析
-                - 其他值: 使用视觉模型解析
-            - tenant_id: 租户 ID（使用视觉模式时必需）
-            - lang: 语言设置（默认 "Chinese"）
-
-    Returns:
-        tuple: (sections, tables, pdf_parser)
-            - sections: 文本段落列表
-            - tables: 表格列表（通常为空）
-            - pdf_parser: 解析器实例（PlainParser 或 VisionParser）
-
-    Raises:
-        ValueError: 使用视觉模式但未提供 tenant_id 时
-
-    Note:
-        - 纯文本模式速度最快，适合简单文本型 PDF
-        - 视觉模式可以理解复杂布局，但需要配置视觉模型
-    """
+def by_plaintext(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, callback=None, **kwargs):
     layout_recognizer = (kwargs.get("layout_recognizer") or "").strip()
     # 模式1：纯文本解析（默认）
     if (not layout_recognizer) or (layout_recognizer == "Plain Text"):
@@ -513,12 +454,13 @@ def by_plaintext(filename, binary=None, from_page=0, to_page=100000, callback=No
 # PDF 解析器注册表
 # 键名为解析器标识（小写），值为对应的解析函数
 PARSERS = {
-    "deepdoc": by_deepdoc,           # 默认解析器，基于 PyMuPDF
-    "mineru": by_mineru,             # MinerU OCR 解析器
-    "docling": by_docling,           # Docling AI 文档理解
-    "tcadp parser": by_tcadp,        # 腾讯云 TCADP 解析器
-    "paddleocr": by_paddleocr,       # 百度 PaddleOCR 解析器
-    "plaintext": by_plaintext,       # 纯文本解析器（默认）
+    "deepdoc": by_deepdoc,
+    "mineru": by_mineru,
+    "docling": by_docling,
+    "opendataloader": by_opendataloader,
+    "tcadp parser": by_tcadp,
+    "paddleocr": by_paddleocr,
+    "plaintext": by_plaintext,  # default
 }
 
 
@@ -685,45 +627,7 @@ class Docx(DocxParser):
 
         return ""
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000):
-        """
-        解析 DOCX 文档
-
-        该方法是 DOCX 解析的核心入口，遍历文档的所有元素（段落、表格、图片），
-        并将其转换为统一的格式返回。
-
-        Args:
-            filename: DOCX 文件名或路径
-            binary: DOCX 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-
-        Returns:
-            list: 元素列表，每个元素为三元组 (text, image, table)
-                - text: 段落文本（图片和表格时为空字符串）
-                - image: 图片对象（段落和表格时为 None）
-                - table: HTML 格式的表格字符串（非表格时为 None）
-
-        Processing Steps:
-            1. 加载 DOCX 文档
-            2. 遍历文档的所有块（段落和表格）
-            3. 处理段落：
-               - 提取文本内容
-               - 识别标题、说明文字等样式
-               - 提取嵌入的图片
-               - 追踪页码变化
-            4. 处理表格：
-               - 转换为 HTML 格式
-               - 添加标题层级信息作为 caption
-               - 处理合并单元格
-            5. 返回所有元素的列表
-
-        Note:
-            - 页码追踪通过 lastRenderedPageBreak 和 w:br 标签实现
-            - 图片可能与文本或标题关联
-            - 表格会记录其所在的标题层级
-        """
-        # 加载 DOCX 文档
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER):
         self.doc = Document(filename) if not binary else Document(BytesIO(binary))
         pn = 0  # 当前页码
         lines = []  # 存储所有元素
@@ -932,41 +836,7 @@ class Pdf(PdfParser):
     def __init__(self):
         super().__init__()
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, zoomin=3, callback=None, separate_tables_figures=False):
-        """
-        解析 PDF 文档
-
-        该方法是 PDF 解析的核心入口，执行完整的 PDF 解析流程：
-        OCR → 布局分析 → 表格识别 → 文本合并
-
-        Args:
-            filename: PDF 文件名或路径
-            binary: PDF 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-            zoomin: 图片放大倍数（默认 3，提高 OCR 精度）
-            callback: 进度回调函数
-            separate_tables_figures: 是否分别提取表格和图片（默认 False）
-
-        Returns:
-            tuple: (sections, tables) 或 (sections, tables, figures)
-                - sections: 文本段落列表，每个元素为 (text, tag) 元组
-                - tables: 表格列表
-                - figures: 图片列表（仅当 separate_tables_figures=True 时）
-
-        Processing Steps:
-            1. OCR 文字识别：将 PDF 页面转换为图片并识别文字
-            2. 布局分析：识别文本框、图片、表格的位置和边界
-            3. 表格分析：检测和识别表格结构
-            4. 文本合并：将相邻的文本框合并为段落
-            5. 垂直合并：将垂直相邻的文本块合并
-            6. 向下连接：处理跨页的连续文本
-
-        Note:
-            - 整个过程可能需要较长时间，callback 用于报告进度
-            - zoomin 参数影响 OCR 精度和处理速度
-            - separate_tables_figures 控制是否单独提取图片
-        """
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, zoomin=3, callback=None, separate_tables_figures=False):
         start = timer()
         first_start = start
         callback(msg="OCR started")
@@ -1332,7 +1202,7 @@ def load_from_xml_v2(baseURI, rels_item_xml):
     return srels
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=None, **kwargs):
     """
     文档分块函数（核心入口）
 
@@ -1372,9 +1242,9 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     urls = set()  # 提取的超链接 URL 集合
     url_res = []  # 超链接解析结果列表
 
-    # ========== 步骤1：初始化配置参数 ==========
-    # 判断是否为英文（影响分词策略）
-    is_english = lang.lower() == "english"
+    lang = lang or "Chinese"
+    is_english = lang.lower() == "english"  # is_english(cks)
+    parser_config = kwargs.get("parser_config", {"chunk_token_num": 512, "delimiter": "\n!?。；！？", "layout_recognize": "DeepDOC", "analyze_hyperlink": True})
 
     # 获取解析器配置，提供默认值
     parser_config = kwargs.get("parser_config", {
@@ -1501,11 +1371,10 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
 
     # ------------------ PDF 文档处理 ------------------
     elif re.search(r"\.pdf$", filename, re.IGNORECASE):
-        # 步骤1：解析器配置
-        # 规范化布局识别器名称和模型名称
-        layout_recognizer, parser_model_name = normalize_layout_recognizer(
-            parser_config.get("layout_recognize", "DeepDOC")
-        )
+        layout_recognizer, parser_model_name = normalize_layout_recognizer(parser_config.get("layout_recognize", "DeepDOC"))
+        opendataloader_llm_name = kwargs.pop("opendataloader_llm_name", None)
+        if layout_recognizer == "OpenDataLoader" and parser_model_name:
+            opendataloader_llm_name = parser_model_name
 
         # 步骤2：超链接提取（可选）
         if parser_config.get("analyze_hyperlink", False) and is_root:
@@ -1531,6 +1400,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
             layout_recognizer=layout_recognizer,
             mineru_llm_name=parser_model_name,
             paddleocr_llm_name=parser_model_name,
+            opendataloader_llm_name=opendataloader_llm_name,
             **kwargs,
         )
         # 规范化 RTL 文本
@@ -1544,9 +1414,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
         if table_context_size or image_context_size:
             tables = append_context2table_image4pdf(sections, tables, image_context_size)
 
-        # 步骤7：特殊解析器处理
-        # 某些解析器（tcadp、docling、mineru、paddleocr）已内置分块逻辑
-        if name in ["tcadp", "docling", "mineru", "paddleocr"]:
+        if name in ["tcadp", "docling", "mineru", "paddleocr", "opendataloader"]:
             if int(parser_config.get("chunk_token_num", 0)) <= 0:
                 parser_config["chunk_token_num"] = 0
 
@@ -1870,6 +1738,14 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     # 可选：为表格和图片添加上下文
     # if table_context_size or image_context_size:
     #    attach_media_context(res, table_context_size, image_context_size)
+
+    # Attach PDF outline as transient metadata on the first chunk.
+    # task_executor.py will extract and persist it as document metadata.
+    if res and pdf_parser and getattr(pdf_parser, "outlines", None):
+        res[0]["__outline__"] = [
+            {"title": title, "depth": depth}
+            for title, depth, *_ in pdf_parser.outlines
+        ]
 
     return res
 

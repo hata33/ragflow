@@ -46,6 +46,7 @@ from io import BytesIO
 from timeit import default_timer as timer
 from openpyxl import load_workbook
 
+from common.constants import MAXIMUM_PAGE_NUMBER
 from deepdoc.parser.utils import get_text
 from rag.nlp import is_english, random_choices, qbullets_category, add_positions, has_qbullet, docx_question_level
 from rag.nlp import rag_tokenizer, tokenize_table, concat_img
@@ -127,28 +128,7 @@ class Pdf(PdfParser):
     """
 
     def __call__(self, filename, binary=None, from_page=0,
-                 to_page=100000, zoomin=3, callback=None):
-        """
-        解析问答 PDF 文档
-
-        执行 OCR 和布局分析，识别问答结构。
-
-        Args:
-            filename: PDF 文件名或路径
-            binary: PDF 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-            zoomin: 图片放大倍数（默认 3）
-            callback: 进度回调函数
-
-        Returns:
-            tuple: (qai_list, tbls)
-                - qai_list: 问答对列表，每个元素为 (question, answer, image, positions)
-                - tbls: 表格列表
-
-        Raises:
-            ValueError: 无法识别问答结构时
-        """
+                 to_page=MAXIMUM_PAGE_NUMBER, zoomin=3, callback=None):
         start = timer()
         callback(msg="OCR started")
         self.__images__(
@@ -262,7 +242,7 @@ class Docx(DocxParser):
     def __init__(self):
         pass
 
-    def __call__(self, filename, binary=None, from_page=0, to_page=100000, callback=None):
+    def __call__(self, filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, callback=None):
         self.doc = Document(
             filename) if not binary else Document(BytesIO(binary))
         pn = 0
@@ -375,7 +355,7 @@ def mdQuestionLevel(s):
     return (len(match.group(0)), s.lstrip('#').lstrip()) if match else (0, s)
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", callback=None, **kwargs):
+def chunk(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER, lang="Chinese", callback=None, **kwargs):
     """
     解析问答文档并分块
 
@@ -539,7 +519,7 @@ def chunk(filename, binary=None, from_page=0, to_page=100000, lang="Chinese", ca
     elif re.search(r"\.docx$", filename, re.IGNORECASE):
         docx_parser = Docx()
         qai_list, tbls = docx_parser(filename, binary,
-                                     from_page=0, to_page=10000, callback=callback)
+                                     from_page=0, to_page=MAXIMUM_PAGE_NUMBER, callback=callback)
         res = tokenize_table(tbls, doc, eng)
         for i, (q, a, image) in enumerate(qai_list):
             res.append(beAdocDocx(deepcopy(doc), q, a, eng, image, i))

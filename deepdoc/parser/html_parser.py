@@ -61,8 +61,8 @@ class RAGFlowHtmlParser:
             raise TypeError("txt type should be string!")
 
         temp_sections = []
-        soup = BeautifulSoup(txt, "html5lib")
-        # 删除样式、脚本和注释，减少无意义噪声。
+        soup = BeautifulSoup(txt, "html.parser")
+        # delete <style> tag
         for style_tag in soup.find_all(["style", "script"]):
             style_tag.decompose()
         for div_tag in soup.find_all("div"):
@@ -227,4 +227,3 @@ class RAGFlowHtmlParser:
             chunks.append(current_block)
 
         return chunks
-

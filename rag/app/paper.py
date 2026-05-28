@@ -37,7 +37,7 @@ import copy
 import re
 
 from deepdoc.parser.figure_parser import vision_figure_parser_pdf_wrapper
-from common.constants import ParserType
+from common.constants import ParserType, MAXIMUM_PAGE_NUMBER
 from rag.nlp import rag_tokenizer, tokenize, tokenize_table, add_positions, bullets_category, title_frequency, \
     tokenize_chunks, attach_media_context
 from deepdoc.parser import PdfParser
@@ -55,36 +55,11 @@ class Pdf(PdfParser):
     """
 
     def __init__(self):
-        self.model_speciess = ParserType.PAPER.value
+        self.model_species = ParserType.PAPER.value
         super().__init__()
 
     def __call__(self, filename, binary=None, from_page=0,
-                 to_page=100000, zoomin=3, callback=None):
-        """
-        解析学术论文 PDF
-
-        提取论文的标题、作者、摘要等关键信息。
-
-        Args:
-            filename: PDF 文件名或路径
-            binary: PDF 文件的二进制内容（可选）
-            from_page: 起始页码（默认 0）
-            to_page: 结束页码（默认 100000）
-            zoomin: 图片放大倍数（默认 3）
-            callback: 进度回调函数
-
-        Returns:
-            dict: 包含以下键的字典
-                - title: 论文标题
-                - authors: 作者列表
-                - abstract: 摘要内容
-                - sections: 正文段落列表
-                - tables: 表格列表
-
-        Note:
-            - 如果 from_page > 0，则跳过标题和摘要提取
-            - 自动检测双栏布局
-        """
+                 to_page=MAXIMUM_PAGE_NUMBER, zoomin=3, callback=None):
         from timeit import default_timer as timer
         start = timer()
         callback(msg="OCR started")
@@ -196,7 +171,7 @@ class Pdf(PdfParser):
         }
 
 
-def chunk(filename, binary=None, from_page=0, to_page=100000,
+def chunk(filename, binary=None, from_page=0, to_page=MAXIMUM_PAGE_NUMBER,
           lang="Chinese", callback=None, **kwargs):
     """
     解析学术论文 PDF 并分块

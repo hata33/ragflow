@@ -58,6 +58,7 @@ export const LlmSettingFieldSchema = {
   presence_penalty: z.coerce.number().optional(),
   frequency_penalty: z.coerce.number().optional(),
   max_tokens: z.number().optional(),
+  parameter: z.string().optional(),
 };
 
 export const LlmSettingSchema = {
@@ -149,7 +150,7 @@ export function LlmSettingFieldItems({
             <FormLabel className="flex-1">{t('freedom')}</FormLabel>
             <FormControl>
               <Select
-                {...field}
+                value={field.value}
                 onValueChange={(val) => {
                   handleChange(val);
                   field.onChange(val);

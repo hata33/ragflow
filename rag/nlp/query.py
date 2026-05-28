@@ -33,6 +33,7 @@ from collections import defaultdict
 from common.query_base import QueryBase
 from common.doc_store.doc_store_base import MatchTextExpr
 from rag.nlp import rag_tokenizer, term_weight, synonym
+from rag.utils.redis_conn import REDIS_CONN
 
 
 class FulltextQueryer(QueryBase):
@@ -57,10 +58,8 @@ class FulltextQueryer(QueryBase):
     """
 
     def __init__(self):
-        """初始化全文查询器"""
-        self.tw = term_weight.Dealer()      # 词项权重计算器
-        self.syn = synonym.Dealer()           # 同义词查找器
-        # 定义查询字段及其权重
+        self.tw = term_weight.Dealer()
+        self.syn = synonym.Dealer(redis=REDIS_CONN.REDIS if REDIS_CONN.is_alive() else None)
         self.query_fields = [
             "title_tks^10",                   # 标题分词（权重 10）
             "title_sm_tks^5",                 # 标题小写分词（权重 5）
