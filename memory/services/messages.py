@@ -13,12 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-"""
-消息存储服务模块
-
-提供消息的增删改查、索引管理、消息搜索等功能。
-支持多种存储引擎（Elasticsearch/Infinity/OceanBase）的统一接口。
-"""
+import os
 import sys
 from typing import List
 
@@ -26,10 +21,12 @@ from common import settings
 from common.constants import MemoryType
 from common.doc_store.doc_store_base import OrderByExpr, MatchExpr
 
+def _es_index_prefix() -> str:
+    return os.environ.get("ES_INDEX_PREFIX", "").strip()
 
 def index_name(uid: str):
-    """生成用户专属的索引名称"""
-    return f"memory_{uid}"
+    prefix = _es_index_prefix()
+    return f"memory_{prefix}_{uid}" if prefix else f"memory_{uid}"
 
 
 class MessageService:
@@ -274,13 +271,13 @@ class MessageService:
 
     @staticmethod
     def calculate_message_size(message: dict):
-        """
-        计算单条消息的存储大小
-
-        :param message: 消息字典
-        :return: 消息大小（字节）
-        """
-        return sys.getsizeof(message["content"]) + sys.getsizeof(message["content_embed"][0]) * len(message["content_embed"])
+        content_embed = message.get("content_embed")
+        embed_size = (
+            sys.getsizeof(content_embed[0]) * len(content_embed)
+            if content_embed is not None and len(content_embed) > 0
+            else 0
+        )
+        return sys.getsizeof(message.get("content", "")) + embed_size
 
     @classmethod
     def calculate_memory_size(cls, memory_ids: List[str], uid_list: List[str]):

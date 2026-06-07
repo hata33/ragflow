@@ -22,7 +22,7 @@ from abc import ABC
 
 from common.constants import LLMType
 from api.db.services.llm_service import LLMBundle
-from api.db.joint_services.tenant_model_service import get_model_config_by_type_and_name
+from api.db.joint_services.tenant_model_service import get_model_config_from_provider_instance
 from agent.component.llm import LLMParam, LLM
 from common.connection_utils import timeout
 from rag.llm.chat_model import ERROR_PREFIX
@@ -167,9 +167,7 @@ class Categorize(LLM, ABC):
         
         # 更新提示词
         self._param.update_prompt()
-        
-        # 获取聊天模型配置
-        chat_model_config = get_model_config_by_type_and_name(self._canvas.get_tenant_id(), LLMType.CHAT, self._param.llm_id)
+        chat_model_config = get_model_config_from_provider_instance(self._canvas.get_tenant_id(), LLMType.CHAT, self._param.llm_id)
         chat_mdl = LLMBundle(self._canvas.get_tenant_id(), chat_model_config)
 
         # 构建用户提示词

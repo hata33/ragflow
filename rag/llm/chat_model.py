@@ -50,6 +50,7 @@ from copy import deepcopy
 from urllib.parse import urljoin
 
 import json_repair
+from json.decoder import JSONDecodeError
 import litellm
 import openai
 from openai import AsyncOpenAI, OpenAI
@@ -115,6 +116,47 @@ ERROR_PREFIX = "**ERROR**"
 LENGTH_NOTIFICATION_CN = "······\n由于大模型的上下文窗口大小限制，回答已经被大模型截断。"
 LENGTH_NOTIFICATION_EN = "...\nThe answer is truncated by your chosen LLM due to its limitation on context length."
 
+# Generation parameters that are safe to forward to the underlying completion
+# call. `gen_conf` originates from a chat assistant's `llm_setting`, which can
+# also carry RAGFlow-internal metadata (e.g. `model_type`). Anything outside
+# this set is dropped so providers don't reject the request with errors like
+# "Extra inputs are not permitted" / "Unknown parameter: 'model_type'" (#15427).
+ALLOWED_GEN_CONF_KEYS = frozenset(
+    {
+        "temperature",
+        "max_completion_tokens",
+        "top_p",
+        "stream",
+        "stream_options",
+        "stop",
+        "n",
+        "presence_penalty",
+        "frequency_penalty",
+        "functions",
+        "function_call",
+        "logit_bias",
+        "user",
+        "response_format",
+        "seed",
+        "tools",
+        "tool_choice",
+        "logprobs",
+        "top_logprobs",
+        "extra_headers",
+    }
+)
+
+# LiteLLM additionally understands reasoning-control parameters that the
+# model-family policies may inject into `gen_conf` (e.g. `thinking` for
+# Anthropic / Kimi reasoning models, `reasoning_effort` for OpenAI o-series).
+LITELLM_ALLOWED_GEN_CONF_KEYS = ALLOWED_GEN_CONF_KEYS | frozenset(
+    {
+        "thinking",
+        "reasoning_effort",
+        "extra_body",
+    }
+)
+
 
 def _apply_model_family_policies(
     model_name: str,
@@ -162,13 +204,16 @@ def _apply_model_family_policies(
             for key in ("temperature", "top_p", "logprobs", "top_logprobs"):
                 sanitized_gen_conf.pop(key, None)
                 sanitized_kwargs.pop(key, None)
+        elif provider == SupportedLiteLLMProvider.Anthropic and model_name_lower in {"claude-opus-4-7", "claude-opus-4-8"}:
+            for key in ("temperature", "top_p", "top_k"):
+                sanitized_gen_conf.pop(key, None)
+                sanitized_kwargs.pop(key, None)
 
         # 混元模型移除惩罚参数
         if provider == SupportedLiteLLMProvider.HunYuan:
             for key in ("presence_penalty", "frequency_penalty"):
                 sanitized_gen_conf.pop(key, None)
-        # Kimi K2.5 系列模型配置 thinking 参数
-        elif "kimi-k2.5" in model_name_lower:
+        elif "kimi-k2.5" in model_name_lower or "kimi-k2.6" in model_name_lower:
             reasoning = sanitized_gen_conf.pop("reasoning", None)
             thinking = {"type": "enabled"}
             if reasoning is not None:
@@ -320,32 +365,7 @@ class Base(ABC):
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
 
-        # 定义允许的配置项
-        allowed_conf = {
-            "temperature",
-            "max_completion_tokens",
-            "top_p",
-            "stream",
-            "stream_options",
-            "stop",
-            "n",
-            "presence_penalty",
-            "frequency_penalty",
-            "functions",
-            "function_call",
-            "logit_bias",
-            "user",
-            "response_format",
-            "seed",
-            "tools",
-            "tool_choice",
-            "logprobs",
-            "top_logprobs",
-            "extra_headers",
-        }
-
-        # 只保留允许的配置项
-        gen_conf = {k: v for k, v in gen_conf.items() if k in allowed_conf}
+        gen_conf = {k: v for k, v in gen_conf.items() if k in ALLOWED_GEN_CONF_KEYS}
         return gen_conf
 
     async def _async_chat_streamly(self, history, gen_conf, **kwargs):
@@ -995,9 +1015,12 @@ class VolcEngineChat(Base):
         model_name is for display only
         """
         base_url = base_url if base_url else "https://ark.cn-beijing.volces.com/api/v3"
-        ark_api_key = json.loads(key).get("ark_api_key", "")
-        model_name = json.loads(key).get("ep_id", "") + json.loads(key).get("endpoint_id", "")
-        super().__init__(ark_api_key, model_name, base_url, **kwargs)
+        try:
+            ark_api_key = json.loads(key).get("ark_api_key", "")
+            model_name = json.loads(key).get("ep_id", "") + json.loads(key).get("endpoint_id", "")
+            super().__init__(ark_api_key, model_name, base_url, **kwargs)
+        except JSONDecodeError:
+            super().__init__(key, model_name, base_url, **kwargs)
 
 
 class MistralChat(Base):
@@ -1581,6 +1604,7 @@ class LiteLLMBase(ABC):
         )
 
         gen_conf.pop("max_tokens", None)
+        gen_conf = {k: v for k, v in gen_conf.items() if k in LITELLM_ALLOWED_GEN_CONF_KEYS}
         return gen_conf
 
     def _need_reasoning_content_back(self) -> bool:
