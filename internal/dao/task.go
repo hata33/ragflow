@@ -57,3 +57,16 @@ func (dao *TaskDAO) DeleteByTenantID(tenantID string) (int64, error) {
 	result := DB.Unscoped().Where("doc_id IN (SELECT id FROM document WHERE tenant_id = ?)", tenantID).Delete(&entity.Task{})
 	return result.RowsAffected, result.Error
 }
+
+// GetByDocID gets all tasks by document ID
+func (dao *TaskDAO) GetByDocID(docID string) ([]*entity.Task, error) {
+	var tasks []*entity.Task
+	err := DB.Where("doc_id = ?", docID).Find(&tasks).Error
+	return tasks, err
+}
+
+func (dao *TaskDAO) GetAllTasks() ([]*entity.Task, error) {
+	var tasks []*entity.Task
+	err := DB.Find(&tasks).Error
+	return tasks, err
+}

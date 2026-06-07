@@ -20,11 +20,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
+	"ragflow/internal/common"
 	"ragflow/internal/dao"
 	"ragflow/internal/engine"
 	"ragflow/internal/engine/types"
 )
+
+// KBDocIDsMap maps a KB ID to its document IDs.
+// Example: {"kb1": ["doc1", "doc2"], "kb2": ["doc3"]}
+type KBDocIDsMap map[string][]string
+
+// DocMetaMap maps a document ID to its metadata fields.
+// Example: {"doc1": {"author": "Zhang San", "date": "2024-01-01"}}
+type DocMetaMap map[string]map[string]interface{}
 
 // MetadataService provides common metadata operations
 type MetadataService struct {
@@ -77,27 +87,23 @@ func (s *MetadataService) SearchMetadata(kbID, tenantID string, docIDs []string,
 	indexName := BuildMetadataIndexName(tenantID)
 
 	searchReq := &types.SearchRequest{
-		IndexNames:   []string{indexName},
-		KbIDs:        []string{kbID},
-		DocIDs:       docIDs,
-		Page:         1,
-		Size:         size,
-		KeywordOnly:  true,
+		IndexNames: []string{indexName},
+		KbIDs:      []string{kbID},
+		Offset:     0,
+		Limit:      size,
+		Filter: map[string]interface{}{
+			"doc_id": docIDs,
+		},
 	}
 
-	result, err := s.docEngine.Search(context.Background(), searchReq)
+	searchResult, err := s.docEngine.Search(context.Background(), searchReq)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	searchResp, ok := result.(*types.SearchResponse)
-	if !ok {
-		return nil, fmt.Errorf("invalid search response type")
-	}
-
 	return &SearchMetadataResult{
 		IndexName: indexName,
-		Chunks:    searchResp.Chunks,
+		Chunks:    searchResult.Chunks,
 	}, nil
 }
 
@@ -115,27 +121,239 @@ func (s *MetadataService) SearchMetadataByKBs(kbIDs []string, size int) (*Search
 	indexName := BuildMetadataIndexName(tenantID)
 
 	searchReq := &types.SearchRequest{
-		IndexNames:   []string{indexName},
-		KbIDs:        kbIDs,
-		Page:         1,
-		Size:         size,
-		KeywordOnly:  true,
+		IndexNames: []string{indexName},
+		KbIDs:      kbIDs,
+		Offset:     0,
+		Limit:      size,
 	}
 
-	result, err := s.docEngine.Search(context.Background(), searchReq)
+	searchResult, err := s.docEngine.Search(context.Background(), searchReq)
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	searchResp, ok := result.(*types.SearchResponse)
-	if !ok {
-		return nil, fmt.Errorf("invalid search response type")
-	}
-
 	return &SearchMetadataResult{
 		IndexName: indexName,
-		Chunks:    searchResp.Chunks,
+		Chunks:    searchResult.Chunks,
 	}, nil
+}
+
+// GetFlattedMetaByKBs returns flattened metadata in the format:
+// {field_name: {value: [doc_ids]}}
+func (s *MetadataService) GetFlattedMetaByKBs(kbIDs []string) (common.MetaData, error) {
+	if len(kbIDs) == 0 {
+		return make(common.MetaData), nil
+	}
+
+	// Get metadata for all docs in KBs (use large limit like Python's 10000)
+	result, err := s.SearchMetadataByKBs(kbIDs, 10000)
+	if err != nil {
+		return nil, err
+	}
+
+	flattedMeta := make(common.MetaData)
+
+	for _, chunk := range result.Chunks {
+		// Extract doc_id from chunk
+		docID := ""
+		if id, ok := chunk["id"].(string); ok {
+			docID = id
+		} else if id, ok := chunk["doc_id"].(string); ok {
+			docID = id
+		}
+
+		if docID == "" {
+			continue
+		}
+
+		// Extract metadata fields
+		metaFields, err := ExtractMetaFields(chunk)
+		if err != nil || len(metaFields) == 0 {
+			continue
+		}
+
+		// Flatten each field
+		for fieldName, fieldValue := range metaFields {
+			if fieldValue == nil {
+				continue
+			}
+
+			// Initialize field map if not exists
+			if _, exists := flattedMeta[fieldName]; !exists {
+				flattedMeta[fieldName] = make(common.MetaValueDocs)
+			}
+
+			valueMap := flattedMeta[fieldName]
+
+			// Handle string, number (float64/int), and list of string/number
+			switch v := fieldValue.(type) {
+			case string:
+				// Single string value (including time strings)
+				if v != "" {
+					if _, exists := valueMap[v]; !exists {
+						valueMap[v] = []string{docID}
+					} else {
+						valueMap[v] = appendDocID(valueMap[v], docID)
+					}
+				}
+			case float64:
+				// Numeric value - convert to string (matching Python's str())
+				strVal := strconv.FormatFloat(v, 'f', -1, 64)
+				if _, exists := valueMap[strVal]; !exists {
+					valueMap[strVal] = []string{docID}
+				} else {
+					valueMap[strVal] = appendDocID(valueMap[strVal], docID)
+				}
+			case int:
+				// Integer value - convert to string
+				strVal := fmt.Sprintf("%d", v)
+				if _, exists := valueMap[strVal]; !exists {
+					valueMap[strVal] = []string{docID}
+				} else {
+					valueMap[strVal] = appendDocID(valueMap[strVal], docID)
+				}
+			case []interface{}:
+				// List of values (string, number, or time)
+				for _, item := range v {
+					switch itemVal := item.(type) {
+					case string:
+						if itemVal != "" {
+							if _, exists := valueMap[itemVal]; !exists {
+								valueMap[itemVal] = []string{docID}
+							} else {
+								valueMap[itemVal] = appendDocID(valueMap[itemVal], docID)
+							}
+						}
+					case float64:
+						strVal := strconv.FormatFloat(itemVal, 'f', -1, 64)
+						if _, exists := valueMap[strVal]; !exists {
+							valueMap[strVal] = []string{docID}
+						} else {
+							valueMap[strVal] = appendDocID(valueMap[strVal], docID)
+						}
+					case int:
+						strVal := fmt.Sprintf("%d", itemVal)
+						if _, exists := valueMap[strVal]; !exists {
+							valueMap[strVal] = []string{docID}
+						} else {
+							valueMap[strVal] = appendDocID(valueMap[strVal], docID)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return flattedMeta, nil
+}
+
+// CollectDocIDsByKB collects unique (kb_id, doc_id) pairs from chunks.
+func CollectDocIDsByKB(chunks []map[string]interface{}) KBDocIDsMap {
+	seen := make(map[string]struct{})
+	result := make(KBDocIDsMap)
+	for _, chunk := range chunks {
+		kbID, _ := chunk["kb_id"].(string)
+		docID := extractDocID(chunk)
+		if kbID == "" || docID == "" {
+			continue
+		}
+		key := kbID + ":" + docID
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result[kbID] = append(result[kbID], docID)
+	}
+	return result
+}
+
+// ConvertSearchResultToDocMeta converts SearchMetadataResult chunks into a DocMetaMap.
+// Pure function, no dependencies.
+func ConvertSearchResultToDocMeta(chunks []map[string]interface{}) DocMetaMap {
+	metaByDoc := make(DocMetaMap)
+	for _, metaChunk := range chunks {
+		docID := extractDocID(metaChunk)
+		if docID == "" {
+			continue
+		}
+		metaFields, err := ExtractMetaFields(metaChunk)
+		if err != nil || len(metaFields) == 0 {
+			continue
+		}
+		metaByDoc[docID] = metaFields
+	}
+	return metaByDoc
+}
+
+// FetchDocMetaByKB fetches document metadata from ES for each KB.
+func (s *MetadataService) FetchDocMetaByKB(docIDsByKB KBDocIDsMap, tenantID string) DocMetaMap {
+	metaByDoc := make(DocMetaMap)
+	for kbID, docIDs := range docIDsByKB {
+		result, err := s.SearchMetadata(kbID, tenantID, docIDs, len(docIDs))
+		if err != nil {
+			continue
+		}
+		for docID, meta := range ConvertSearchResultToDocMeta(result.Chunks) {
+			metaByDoc[docID] = meta
+		}
+	}
+	return metaByDoc
+}
+
+// AttachDocMetaToChunks attaches document metadata to matching chunks in-place.
+func AttachDocMetaToChunks(chunks []map[string]interface{}, metaByDoc DocMetaMap, metadataFields []string) {
+	filter := make(map[string]struct{}, len(metadataFields))
+	for _, f := range metadataFields {
+		filter[f] = struct{}{}
+	}
+	for _, chunk := range chunks {
+		docID := extractDocID(chunk)
+		meta, ok := metaByDoc[docID]
+		if !ok {
+			continue
+		}
+		if len(filter) > 0 {
+			filtered := make(map[string]interface{}, len(filter))
+			for k, v := range meta {
+				if _, ok := filter[k]; ok {
+					filtered[k] = v
+				}
+			}
+			if len(filtered) > 0 {
+				chunk["document_metadata"] = filtered
+			}
+		} else {
+			chunk["document_metadata"] = meta
+		}
+	}
+}
+
+// EnrichChunksWithDocMetadata attaches document metadata to each chunk in-place.
+// Combines CollectDocIDsByKB, FetchDocMetaByKB, and AttachDocMetaToChunks.
+func (s *MetadataService) EnrichChunksWithDocMetadata(chunks []map[string]interface{}, tenantID string, metadataFields []string) {
+	if len(chunks) == 0 || s.docEngine == nil {
+		return
+	}
+	docIDsByKB := CollectDocIDsByKB(chunks)
+	if len(docIDsByKB) == 0 {
+		return
+	}
+	metaByDoc := s.FetchDocMetaByKB(docIDsByKB, tenantID)
+	if len(metaByDoc) == 0 {
+		return
+	}
+	AttachDocMetaToChunks(chunks, metaByDoc, metadataFields)
+}
+
+// extractDocID extracts the document ID from a chunk, checking both id and doc_id.
+func extractDocID(chunk map[string]interface{}) string {
+	if id, ok := chunk["id"].(string); ok {
+		return id
+	}
+	if id, ok := chunk["doc_id"].(string); ok {
+		return id
+	}
+	return ""
 }
 
 // ExtractDocumentID extracts the document ID from a chunk
@@ -160,17 +378,79 @@ func ExtractMetaFields(chunk map[string]interface{}) (map[string]interface{}, er
 			return make(map[string]interface{}), nil
 		}
 	case []byte:
-		metaFields = ParseLengthPrefixedJSON(v)
-		if metaFields == nil {
-			if err := json.Unmarshal(v, &metaFields); err != nil {
-				return make(map[string]interface{}), nil
+		allResults := ParseAllLengthPrefixedJSON(v)
+		if len(allResults) > 0 {
+			// Merge all JSON objects - when same key appears with different values, collect all
+			metaFields = make(map[string]interface{})
+			for _, result := range allResults {
+				for k, val := range result {
+					if existing, exists := metaFields[k]; exists {
+						// Key already exists - merge values
+						metaFields[k] = mergeFieldValues(existing, val)
+					} else {
+						metaFields[k] = val
+					}
+				}
 			}
+		} else if err := json.Unmarshal(v, &metaFields); err != nil {
+			return make(map[string]interface{}), nil
 		}
 	default:
 		return make(map[string]interface{}), nil
 	}
 
 	return metaFields, nil
+}
+
+// mergeFieldValues merges two field values when the same key appears multiple times
+// If both are arrays, append all elements. If one is array and other is string, append string to array.
+// Returns []interface{} with all merged values (flattened).
+func mergeFieldValues(existing, new interface{}) []interface{} {
+	result := []interface{}{}
+
+	var addValue func(v interface{})
+	addValue = func(v interface{}) {
+		if v == nil {
+			return
+		}
+		switch val := v.(type) {
+		case string:
+			if val != "" {
+				result = append(result, val)
+			}
+		case []interface{}:
+			for _, item := range val {
+				addValue(item)
+			}
+		}
+	}
+
+	addValue(existing)
+	addValue(new)
+
+	return result
+}
+
+// appendDocID appends a docID to an existing value that may be []string or []interface{}
+func appendDocID(existing interface{}, docID string) []string {
+	result := []string{docID}
+	if existing == nil {
+		return result
+	}
+	switch v := existing.(type) {
+	case []string:
+		return append(v, docID)
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	case string:
+		return append(result, v)
+	}
+	return result
 }
 
 // ParseLengthPrefixedJSON parses Infinity's length-prefixed JSON format

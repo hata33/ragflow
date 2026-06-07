@@ -1,4 +1,5 @@
 import { RAGFlowFormItem } from '@/components/ragflow-form';
+import { Button, ButtonLoading } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -13,7 +14,7 @@ import { LLMFactory } from '@/constants/llm';
 import { VerifyResult } from '@/pages/user-setting/setting-model/hooks';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { t } from 'i18next';
-import { memo } from 'react';
+import { memo, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { z } from 'zod';
@@ -21,6 +22,9 @@ import { LLMHeader } from '../../components/llm-header';
 import VerifyButton from '../verify-button';
 
 const FormSchema = z.object({
+  instance_name: z.string().min(1, {
+    message: t('setting.instanceNameMessage'),
+  }),
   llm_name: z.string().min(1, {
     message: t('setting.paddleocr.modelNameRequired'),
   }),
@@ -44,7 +48,10 @@ export interface IModalProps<T> {
 }
 
 const algorithmOptions: RAGFlowSelectOptionType[] = [
+  { label: 'PaddleOCR-VL-1.5', value: 'PaddleOCR-VL-1.5' },
   { label: 'PaddleOCR-VL', value: 'PaddleOCR-VL' },
+  { label: 'PP-OCRv5', value: 'PP-OCRv5' },
+  { label: 'PP-StructureV3', value: 'PP-StructureV3' },
 ];
 
 const PaddleOCRModal = ({
@@ -59,6 +66,7 @@ const PaddleOCRModal = ({
   const form = useForm<PaddleOCRFormValues>({
     resolver: zodResolver(FormSchema),
     defaultValues: {
+      instance_name: '',
       paddleocr_algorithm: 'PaddleOCR-VL',
     },
   });
@@ -69,6 +77,12 @@ const PaddleOCRModal = ({
       hideModal?.();
     }
   };
+
+  useEffect(() => {
+    if (!visible) {
+      form.reset();
+    }
+  }, [visible, form]);
 
   return (
     <Dialog open={visible} onOpenChange={hideModal}>
@@ -84,6 +98,14 @@ const PaddleOCRModal = ({
             className="space-y-6"
             id="paddleocr-form"
           >
+            <RAGFlowFormItem
+              name="instance_name"
+              label={t('setting.instanceName')}
+              tooltip={t('setting.instanceNameTip')}
+              required
+            >
+              <Input placeholder={t('setting.instanceNameMessage')} />
+            </RAGFlowFormItem>
             <RAGFlowFormItem
               name="llm_name"
               label={t('setting.modelName')}
@@ -128,20 +150,12 @@ const PaddleOCRModal = ({
             )}
             <DialogFooter>
               <div className="flex justify-end space-x-2">
-                <button
-                  type="button"
-                  onClick={hideModal}
-                  className="btn btn-secondary"
-                >
+                <Button type="button" onClick={hideModal} variant={'outline'}>
                   {t('common.cancel')}
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="btn btn-primary"
-                >
-                  {t('common.add')}
-                </button>
+                </Button>
+                <ButtonLoading type="submit" loading={loading}>
+                  {t('common.ok')}
+                </ButtonLoading>
               </div>
             </DialogFooter>
           </form>

@@ -18,6 +18,8 @@ package dao
 
 import (
 	"ragflow/internal/entity"
+
+	"gorm.io/gorm"
 )
 
 // TenantModelDAO tenant model data access object
@@ -32,8 +34,33 @@ func (dao *TenantModelDAO) Create(instance *entity.TenantModel) error {
 	return DB.Create(instance).Error
 }
 
+func (dao *TenantModelDAO) CreateBatch(models []*entity.TenantModel) error {
+	if len(models) == 0 {
+		return nil
+	}
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		for _, model := range models {
+			if err := tx.Create(model).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (dao *TenantModelDAO) DeleteByModelID(modelID string) (int64, error) {
 	result := DB.Unscoped().Where("id = ?", modelID).Delete(&entity.TenantModel{})
+	return result.RowsAffected, result.Error
+}
+
+func (dao *TenantModelDAO) DeleteByProviderIDAndInstanceID(provideID, instanceID string) (int64, error) {
+	result := DB.Unscoped().Where("provider_id = ? AND instance_id = ?", provideID, instanceID).Delete(&entity.TenantModel{})
+	return result.RowsAffected, result.Error
+}
+
+func (dao *TenantModelDAO) DeleteByProviderIDAndInstanceIDAndModelName(provideID, instanceID, modelName string) (int64, error) {
+	result := DB.Unscoped().Where("provider_id = ? AND instance_id = ? AND model_name = ?", provideID, instanceID, modelName).Delete(&entity.TenantModel{})
 	return result.RowsAffected, result.Error
 }
 

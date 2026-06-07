@@ -102,7 +102,7 @@ func (dao *FileDAO) GetRootFolder(tenantID string) (*entity.File, error) {
 	}
 	file.SourceType = ""
 
-	if err := DB.Create(&file).Error; err != nil {
+	if err = DB.Create(&file).Error; err != nil {
 		return nil, err
 	}
 	return &file, nil
@@ -197,6 +197,11 @@ func (dao *FileDAO) GetAllParentFolders(startID string) ([]*entity.File, error) 
 // Create creates a new file
 func (dao *FileDAO) Create(file *entity.File) error {
 	return DB.Create(file).Error
+}
+
+// UpdateByID updates a file by ID
+func (dao *FileDAO) UpdateByID(id string, updates map[string]interface{}) error {
+	return DB.Model(&entity.File{}).Where("id = ?", id).Updates(updates).Error
 }
 
 // DeleteByTenantID deletes all files by tenant ID (hard delete)
@@ -306,11 +311,6 @@ func (dao *FileDAO) Query(name string, parentID string) []*entity.File {
 	}
 	query.Find(&files)
 	return files
-}
-
-// UpdateByID updates file by ID with the given fields
-func (dao *FileDAO) UpdateByID(id string, updates map[string]interface{}) error {
-	return DB.Model(&entity.File{}).Where("id = ?", id).Updates(updates).Error
 }
 
 // Delete deletes a file by ID (hard delete)
@@ -427,7 +427,7 @@ func (dao *FileDAO) newAFileFromDataset(tenantID, name, parentID string) (*entit
 		SourceType: "knowledgebase",
 	}
 
-	if err := DB.Create(file).Error; err != nil {
+	if err = DB.Create(file).Error; err != nil {
 		return nil, err
 	}
 	return file, nil
@@ -470,7 +470,7 @@ func (dao *FileDAO) addFileFromKB(doc *entity.Document, datasetFolderID, tenantI
 		SourceType: "knowledgebase",
 	}
 
-	if err := DB.Create(file).Error; err != nil {
+	if err = DB.Create(file).Error; err != nil {
 		return err
 	}
 
@@ -481,7 +481,7 @@ func (dao *FileDAO) addFileFromKB(doc *entity.Document, datasetFolderID, tenantI
 		DocumentID: &doc.ID,
 	}
 
-	if err := DB.Create(f2d).Error; err != nil {
+	if err = DB.Create(f2d).Error; err != nil {
 		return err
 	}
 

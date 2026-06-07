@@ -35,7 +35,6 @@ import {
   QueryStringMap,
   useNavigatePage,
 } from '@/hooks/logic-hooks/navigate-hooks';
-import { useFetchKnowledgeBaseConfiguration } from '@/hooks/use-knowledge-request';
 import { LucideArrowBigLeft } from 'lucide-react';
 import styles from './index.module.less';
 
@@ -54,7 +53,6 @@ const Chunk = () => {
   } = useFetchNextChunkList();
   const { handleChunkCardClick, selectedChunkId } = useHandleChunkCardClick();
   const isPdf = documentInfo?.type === 'pdf';
-  const { data: dataset } = useFetchKnowledgeBaseConfiguration();
 
   const { t } = useTranslation();
   const { changeChunkTextMode, textMode } = useChangeChunkTextMode();
@@ -69,8 +67,7 @@ const Chunk = () => {
     chunkUpdatingVisible,
     documentId,
   } = useUpdateChunk();
-  const { navigateToDataFile, getQueryString, navigateToDatasetList } =
-    useNavigatePage();
+  const { navigateToDataFile, getQueryString } = useNavigatePage();
   const fileUrl = useGetDocumentUrl(false);
   useEffect(() => {
     setChunkList(data);
@@ -218,7 +215,7 @@ const Chunk = () => {
             </header>
 
             <Spin spinning={loading} className="flex-1 h-0" size="large">
-              <div className="relative @container h-full px-5 pb-5 overflow-x-hidden overflow-y-auto">
+              <div className="relative @container h-full px-5 pb-5 overflow-hidden flex flex-col">
                 <div
                   className="
                     sticky top-0 z-[1] bg-bg-base space-y-4 py-5
@@ -248,7 +245,7 @@ const Chunk = () => {
                   />
                 </div>
 
-                <div className="space-y-4">
+                <div className="space-y-4 flex-1 overflow-y-auto min-h-0">
                   {chunkList.map((item) => (
                     <ChunkCard
                       item={item}

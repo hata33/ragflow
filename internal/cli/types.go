@@ -47,7 +47,7 @@ const (
 	TokenPassword
 	TokenDataset
 	TokenDatasets
-	TokenDatasetTable
+	TokenChunkStore
 	TokenOf
 	TokenAgents
 	TokenRole
@@ -73,6 +73,7 @@ const (
 	TokenKeys
 	TokenGenerate
 	TokenAvailable
+	TokenSupported
 	TokenModel
 	TokenModels
 	TokenProvider
@@ -80,22 +81,38 @@ const (
 	TokenDefault
 	TokenChats
 	TokenChat
+	TokenMessage
+	TokenImage
+	TokenVideo
+	TokenAudio
+	TokenStream
 	TokenFiles
 	TokenAs
 	TokenParse
 	TokenImport
 	TokenInto
+	TokenIn
 	TokenWith
 	TokenParser
 	TokenPipeline
 	TokenSearch
 	TokenCurrent
-	TokenLLM
-	TokenVLM
+	TokenVision
 	TokenEmbedding
-	TokenReranker
+	TokenRerank
 	TokenASR
 	TokenTTS
+	TokenOCR
+	TokenDocParse
+	TokenEmbed
+	TokenText
+	TokenQuery
+	TokenFormat
+	TokenParam
+	TokenPlay
+	TokenSave
+	TokenTop
+	TokenDimension
 	TokenAsync
 	TokenSync
 	TokenBenchmark
@@ -106,26 +123,47 @@ const (
 	TokenIndex
 	TokenVector
 	TokenSize
-	TokenDocMeta
+	TokenStore
 	TokenName // For ALTER PROVIDER <name> NAME <new_name>
+	TokenBalance
 	TokenInstance
 	TokenInstances
 	TokenDisable
 	TokenEnable
 	TokenUse
+	TokenCheck
 	TokenThink
+	TokenEffort
+	TokenVerbosity
+	TokenNone
+	TokenMinimal
+	TokenLow
+	TokenMedium
+	TokenHigh
+	TokenMax
 	TokenLS
 	TokenCat
 	TokenInsert
 	TokenFile
 	TokenMetadata
 	TokenTable
+	TokenGet
 	TokenUpdate
 	TokenRemove
 	TokenChunk
 	TokenChunks
 	TokenDocument
+	TokenDocuments
 	TokenTag
+	TokenRegion
+	TokenURL
+	TokenTask
+	TokenTasks
+	TokenIngestor
+	TokenIngestors
+	TokenStart
+	TokenStop
+	TokenIngestion
 	TokenLog
 	TokenLevel
 	TokenDebug
@@ -139,8 +177,10 @@ const (
 	TokenQuotedString
 	TokenInteger
 	TokenFloat
+	TokenNumber = TokenInteger // Alias for integer tokens in path parsing (e.g., version numbers like 1.0.0)
 
 	// Special
+	_ = iota
 	TokenSemicolon
 	TokenComma
 	TokenSlash

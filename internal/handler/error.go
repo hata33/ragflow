@@ -18,17 +18,31 @@ package handler
 
 import (
 	"net/http"
+	"ragflow/internal/common"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
-
-	"ragflow/internal/logger"
 )
 
 // HandleNoRoute handles requests to undefined routes
 func HandleNoRoute(c *gin.Context) {
+	// Python parity: GET /api/v1/auth/login/ (an empty OAuth channel) resolves
+	// to a Werkzeug MethodNotAllowed in the Python API, which
+	// server_error_response renders as HTTP 200 / code 100 with the
+	// exception's repr() as the message. gin instead falls through to
+	// NoRoute, so emit the same body here to keep the auth error paths
+	// byte-for-byte aligned.
+	if c.Request.Method == http.MethodGet && c.Request.URL.Path == "/api/v1/auth/login/" {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    common.CodeExceptionError,
+			"data":    nil,
+			"message": "<MethodNotAllowed '405: Method Not Allowed'>",
+		})
+		return
+	}
+
 	// Log the request details on server side
-	logger.Logger.Warn("The requested URL was not found",
+	common.Logger.Warn("The requested URL was not found",
 		zap.String("method", c.Request.Method),
 		zap.String("path", c.Request.URL.Path),
 		zap.String("query", c.Request.URL.RawQuery),

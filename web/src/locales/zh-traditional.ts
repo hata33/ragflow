@@ -390,7 +390,8 @@ export default {
         '基於知識庫內所有切好的文本塊構建知識圖譜，用以提升多跳和複雜問題回答的正確率。請注意：構建知識圖譜將消耗大量 token 和時間。詳見 https://ragflow.io/docs/dev/construct_knowledge_graph。',
       graphRagMethod: '方法',
       graphRagMethodTip: `Light：實體和關係提取提示來自 GitHub - HKUDS/LightRAG：“LightRAG：簡單快速的檢索增強生成”<br>
- 一般：實體和關係擷取提示來自 GitHub - microsoft/graphrag：基於模組化圖形的檢索增強生成 (RAG) 系統，`,
+ 一般：實體和關係擷取提示來自 GitHub - microsoft/graphrag：基於模組化圖形的檢索增強生成 (RAG) 系統，<br>
+ NER：使用 spaCy NER 和基於規則的關鍵詞提取來抽取實體和關係，無需 LLM 參與提取過程，速度快且資源消耗低`,
       resolution: '實體歸一化',
       resolutionTip: `解析過程會將具有相同意義的實體合併在一起，使知識圖譜更簡潔、更準確。應合併以下實體：川普總統、唐納德·川普、唐納德·J·川普、唐納德·約翰·川普`,
       community: '社群報告生成',
@@ -424,6 +425,9 @@ export default {
       delete: '删除',
     },
     chat: {
+      chatSupport: '聊天支援',
+      replyInstantly: '我們通常會即時回覆',
+      typeYourMessage: '輸入您的訊息...',
       newConversation: '新會話',
       createAssistant: '新建助理',
       assistantSetting: '助理設置',
@@ -678,8 +682,8 @@ export default {
       FishAudioLink: '如何使用Fish Audio',
       TencentCloudLink: '如何使用騰訊雲語音識別',
       volcModelNameMessage: '請輸入模型名稱！',
-      addEndpointID: '模型 EndpointID',
-      endpointIDMessage: '請輸入模型對應的EndpointID',
+      addEndpointID: '模型 ID',
+      endpointIDMessage: '請輸入模型 ID',
       addArkApiKey: '火山 ARK_API_KEY',
       ArkApiKeyMessage: '請輸入火山創建的ARK_API_KEY',
       bedrockModelNameMessage: '請輸入名稱！',
@@ -906,10 +910,8 @@ export default {
       searXNG: 'SearXNG',
       searXNGDescription:
         '此組件透過您提供的 SearXNG 實例 URL 進行搜尋。請設定 Top N 和實例 URL。',
-      pdfGenerator: '文檔生成器',
-      pPDFGenerator: '文檔生成器',
-      pdfGeneratorDescription: `該組件從 markdown 格式的內容生成文檔（PDF、DOCX、TXT），支援自定義樣式、圖片和表格。支援：**粗體**、*斜體*、# 標題、- 列表、使用 | 語法的表格。`,
-      pPDFGeneratorDescription: `該組件從 markdown 格式的內容生成文檔（PDF、DOCX、TXT），支援自定義樣式、圖片和表格。支援：**粗體**、*斜體*、# 標題、- 列表、使用 | 語法的表格。`,
+      docGenerator: '文檔生成器',
+      docGeneratorDescription: `從 Markdown 內容產生檔案。`,
       subtitle: '副標題',
       logoImage: '標誌圖片',
       logoPosition: '標誌位置',

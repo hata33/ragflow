@@ -17,7 +17,9 @@ import json
 import os
 import threading
 from abc import ABC
+from contextlib import contextmanager
 from urllib.parse import urljoin
+from json.decoder import JSONDecodeError
 
 import dashscope
 import numpy as np
@@ -26,11 +28,90 @@ from ollama import Client
 from openai import OpenAI
 from zhipuai import ZhipuAI
 
+from common.exceptions import ModelException
 from common.log_utils import log_exception
 from common.token_utils import num_tokens_from_string, truncate, total_token_count_from_response
 from common import settings
 import logging
 import base64
+
+logger = logging.getLogger(__name__)
+
+
+def _raise_model_exception_if_failed(resp):
+    status_code = resp.status_code
+    if status_code >= 400:
+        if status_code < 500 and status_code not in [408, 429]:
+            raise ModelException(f"status: {resp.status_code}, response: {resp.text}", retryable=False)
+        raise ModelException(f"status: {resp.status_code}, response: {resp.text}", retryable=True)
+
+
+def _dashscope_base_url_for_log(base_url: str) -> str:
+    """Log host/path only (no query string) so secrets in URLs are not printed."""
+    return base_url.split("?", 1)[0].strip()[:256]
+
+
+def _dashscope_native_http_api_url(base_url: str | None) -> str | None:
+    """
+    Resolve the DashScope *native* HTTP API root for Tongyi-Qianwen (Qwen) text embeddings.
+
+    RAGFlow often stores an OpenAI-compatible base URL (e.g. ``.../compatible-mode/v1``) for
+    the same provider. The ``dashscope`` Python SDK used by ``TextEmbedding.call`` does *not*
+    use that path; it expects ``https://<host>/api/v1`` instead.
+
+    Users outside mainland China are directed to the international endpoint
+    (``dashscope-intl.aliyuncs.com``); domestic traffic uses ``dashscope.aliyuncs.com``.
+    When ``base_url`` already points at the native API root (ends with ``/api/v1``), it is
+    returned unchanged so custom or regional deployments keep working.
+    """
+    if not base_url:
+        return None
+    u = base_url.strip().rstrip("/")
+    safe = _dashscope_base_url_for_log(u)
+    if u.endswith("/api/v1"):
+        logger.debug("DashScope Tongyi-Qianwen embedding: using native API base as configured (%s)", safe)
+        return u
+    # International (Singapore) DashScope — required for overseas Tongyi-Qianwen accounts.
+    if "dashscope-intl.aliyuncs.com" in u:
+        resolved = "https://dashscope-intl.aliyuncs.com/api/v1"
+        logger.info(
+            "DashScope Tongyi-Qianwen embedding: mapped configured base_url to intl native API (%s -> %s)",
+            safe,
+            resolved,
+        )
+        return resolved
+    # China mainland DashScope default host.
+    if "dashscope.aliyuncs.com" in u:
+        resolved = "https://dashscope.aliyuncs.com/api/v1"
+        logger.info(
+            "DashScope Tongyi-Qianwen embedding: mapped configured base_url to CN native API (%s -> %s)",
+            safe,
+            resolved,
+        )
+        return resolved
+    logger.warning(
+        "DashScope Tongyi-Qianwen embedding: base_url is set but not recognized as a DashScope host; "
+        "using SDK default endpoint (%s)",
+        safe,
+    )
+    return None
+
+
+@contextmanager
+def _dashscope_native_api_url_scope(url: str | None):
+    """
+    Temporarily set ``dashscope.base_http_api_url`` for the duration of a single SDK call,
+    then restore the previous value. Narrows the window where concurrent threads see a mismatch.
+    """
+    if not url:
+        yield
+        return
+    prev = getattr(dashscope, "base_http_api_url", None)
+    dashscope.base_http_api_url = url
+    try:
+        yield
+    finally:
+        dashscope.base_http_api_url = prev
 
 
 class Base(ABC):
@@ -73,14 +154,12 @@ class BuiltinEmbed(Base):
         batch_size = 16
         # TEI is able to auto truncate inputs according to https://github.com/huggingface/text-embeddings-inference.
         token_count = 0
-        ress = None
+        batches = []
         for i in range(0, len(texts), batch_size):
             embeddings, token_count_delta = self._model.encode(texts[i : i + batch_size])
             token_count += token_count_delta
-            if ress is None:
-                ress = embeddings
-            else:
-                ress = np.concatenate((ress, embeddings), axis=0)
+            batches.append(embeddings)
+        ress = np.vstack(batches) if batches else np.array([])
         return ress, token_count
 
     def encode_queries(self, text: str):
@@ -103,7 +182,10 @@ class OpenAIEmbed(Base):
         ress = []
         total_tokens = 0
         for i in range(0, len(texts), batch_size):
-            res = self.client.embeddings.create(input=texts[i : i + batch_size], model=self.model_name, encoding_format="float", extra_body={"drop_params": True})
+            try:
+                res = self.client.embeddings.create(input=texts[i : i + batch_size], model=self.model_name, encoding_format="float", extra_body={"drop_params": True})
+            except Exception as _e:
+                raise ModelException(f"Error: {_e}")
             try:
                 ress.extend([d.embedding for d in res.data])
                 total_tokens += total_token_count_from_response(res)
@@ -113,7 +195,10 @@ class OpenAIEmbed(Base):
         return np.array(ress), total_tokens
 
     def encode_queries(self, text):
-        res = self.client.embeddings.create(input=[truncate(text, 8191)], model=self.model_name, encoding_format="float", extra_body={"drop_params": True})
+        try:
+            res = self.client.embeddings.create(input=[truncate(text, 8191)], model=self.model_name, encoding_format="float", extra_body={"drop_params": True})
+        except Exception as _e:
+            raise ModelException(f"Error: {_e}")
         try:
             return np.array(res.data[0].embedding), total_token_count_from_response(res)
         except Exception as _e:
@@ -161,6 +246,34 @@ class AzureEmbed(OpenAIEmbed):
         self.model_name = model_name
 
 
+class AstraflowEmbed(OpenAIEmbed):
+    _FACTORY_NAME = "Astraflow"
+
+    def __init__(self, key, model_name, base_url="https://api-us-ca.umodelverse.ai/v1"):
+        if not base_url:
+            base_url = "https://api-us-ca.umodelverse.ai/v1"
+        super().__init__(key, model_name, base_url)
+
+
+class AstraflowCNEmbed(OpenAIEmbed):
+    _FACTORY_NAME = "Astraflow-CN"
+
+    def __init__(self, key, model_name, base_url="https://api.modelverse.cn/v1"):
+        if not base_url:
+            base_url = "https://api.modelverse.cn/v1"
+        super().__init__(key, model_name, base_url)
+
+
+class FuturMixEmbed(OpenAIEmbed):
+    _FACTORY_NAME = "FuturMix"
+
+    def __init__(self, key, model_name="text-embedding-3-small", base_url="https://futurmix.ai/v1"):
+        if not base_url:
+            base_url = "https://futurmix.ai/v1"
+        super().__init__(key, model_name, base_url)
+        logging.info("[FuturMix] Embedding initialized with model %s", model_name)
+
+
 class BaiChuanEmbed(OpenAIEmbed):
     _FACTORY_NAME = "BaiChuan"
 
@@ -171,11 +284,21 @@ class BaiChuanEmbed(OpenAIEmbed):
 
 
 class QWenEmbed(Base):
+    """
+    Embeddings for Alibaba Tongyi-Qianwen via the DashScope ``TextEmbedding`` API.
+
+    ``base_url`` comes from the user's embedding-model configuration (often the same host
+    as the OpenAI-compatible chat endpoint). This class maps known DashScope hosts to the
+    native ``/api/v1`` base URL so international and China endpoints both work.
+    """
+
     _FACTORY_NAME = "Tongyi-Qianwen"
 
-    def __init__(self, key, model_name="text_embedding_v2", **kwargs):
+    def __init__(self, key, model_name="text_embedding_v2", base_url=None, **kwargs):
         self.key = key
         self.model_name = model_name
+        # Native API root for the SDK; None if base_url is absent or not a known DashScope host.
+        self._dashscope_http_api_url = _dashscope_native_http_api_url(base_url)
 
     def encode(self, texts: list):
         import time
@@ -187,18 +310,23 @@ class QWenEmbed(Base):
         token_count = 0
         texts = [truncate(t, 2048) for t in texts]
         for i in range(0, len(texts), batch_size):
-            retry_max = 5
-            resp = dashscope.TextEmbedding.call(model=self.model_name, input=texts[i : i + batch_size], api_key=self.key, text_type="document")
-            while (resp["output"] is None or resp["output"].get("embeddings") is None) and retry_max > 0:
-                time.sleep(10)
-                resp = dashscope.TextEmbedding.call(model=self.model_name, input=texts[i : i + batch_size], api_key=self.key, text_type="document")
-                retry_max -= 1
-            if retry_max == 0 and (resp["output"] is None or resp["output"].get("embeddings") is None):
-                if resp.get("message"):
-                    log_exception(ValueError(f"Retry_max reached, calling embedding model failed: {resp['message']}"))
+
+            retry_max, retry_wait_secs = 5, 10
+            for retry in range(retry_max):
+                with _dashscope_native_api_url_scope(self._dashscope_http_api_url):
+                    resp = dashscope.TextEmbedding.call(model=self.model_name, input=texts[i : i + batch_size], api_key=self.key, text_type="document")
+                status_code = resp.status_code
+                if status_code >= 400 and status_code < 500 and status_code not in [408, 429]:
+                    raise ModelException(f"Error, status: {status_code}, response: {resp}")
+                    # No need to retry for 4XX error
+                if status_code == 200:
+                    break
+                if retry < retry_max - 1:
+                    logging.warning(f"Got error response from DashScope API (status: {status_code}, response: {resp}). Wait {retry_wait_secs} seconds. Retrying...")
+                    time.sleep(retry_wait_secs)
                 else:
-                    log_exception(ValueError("Retry_max reached, calling embedding model failed"))
-                raise
+                    raise ModelException(f"Error after {retry_max} retries., status: {status_code}, response: {resp}")
+
             try:
                 embds = [[] for _ in range(len(resp["output"]["embeddings"]))]
                 for e in resp["output"]["embeddings"]:
@@ -207,16 +335,21 @@ class QWenEmbed(Base):
                 token_count += total_token_count_from_response(resp)
             except Exception as _e:
                 log_exception(_e, resp)
-                raise
+                raise ModelException(f"Error: {status_code}: {resp}")
         return np.array(res), token_count
 
     def encode_queries(self, text):
-        resp = dashscope.TextEmbedding.call(model=self.model_name, input=text[:2048], api_key=self.key, text_type="query")
+        with _dashscope_native_api_url_scope(self._dashscope_http_api_url):
+            resp = dashscope.TextEmbedding.call(model=self.model_name, input=text[:2048], api_key=self.key, text_type="query")
+        status_code = resp.status_code
+        if status_code != 200:
+            raise ModelException(f"Error: status: {status_code}: code: {resp.get('code')}, message: {resp.get('message')}")
+            # No need to retry for 4XX error
         try:
             return np.array(resp["output"]["embeddings"][0]["embedding"]), total_token_count_from_response(resp)
         except Exception as _e:
             log_exception(_e, resp)
-            raise Exception(f"Error: {resp}")
+            raise ModelException(f"Error: {status_code}: {resp}")
 
 
 class ZhipuEmbed(Base):
@@ -383,7 +516,8 @@ class JinaMultiVecEmbed(Base):
                 data["task"] = task
                 data["truncate"] = True
 
-            response = requests.post(self.base_url, headers=self.headers, json=data)
+            response = requests.post(self.base_url, headers=self.headers, json=data, timeout=30)
+            _raise_model_exception_if_failed(response)
             try:
                 res = response.json()
                 for d in res["data"]:
@@ -661,7 +795,8 @@ class NvidiaEmbed(Base):
                 "encoding_format": "float",
                 "truncate": "END",
             }
-            response = requests.post(self.base_url, headers=self.headers, json=payload)
+            response = requests.post(self.base_url, headers=self.headers, json=payload, timeout=30)
+            _raise_model_exception_if_failed(response)
             try:
                 res = response.json()
                 ress.extend([d["embedding"] for d in res["data"]])
@@ -801,7 +936,8 @@ class SILICONFLOWEmbed(Base):
                 "input": texts_batch,
                 "encoding_format": "float",
             }
-            response = requests.post(self.base_url, json=payload, headers=self.headers)
+            response = requests.post(self.base_url, json=payload, headers=self.headers, timeout=30)
+            _raise_model_exception_if_failed(response)
             try:
                 res = response.json()
                 ress.extend([d["embedding"] for d in res["data"]])
@@ -818,7 +954,8 @@ class SILICONFLOWEmbed(Base):
             "input": text,
             "encoding_format": "float",
         }
-        response = requests.post(self.base_url, json=payload, headers=self.headers)
+        response = requests.post(self.base_url, json=payload, headers=self.headers, timeout=30)
+        _raise_model_exception_if_failed(response)
         try:
             res = response.json()
             return np.array(res["data"][0]["embedding"]), total_token_count_from_response(res)
@@ -928,20 +1065,16 @@ class HuggingFaceEmbed(Base):
         self.base_url = base_url or "http://127.0.0.1:8080"
 
     def encode(self, texts: list):
-        response = requests.post(f"{self.base_url}/embed", json={"inputs": texts}, headers={"Content-Type": "application/json"})
-        if response.status_code == 200:
-            embeddings = response.json()
-        else:
-            raise Exception(f"Error: {response.status_code} - {response.text}")
+        response = requests.post(f"{self.base_url}/embed", json={"inputs": texts}, headers={"Content-Type": "application/json"}, timeout=30)
+        _raise_model_exception_if_failed(response)
+        embeddings = response.json()
         return np.array(embeddings), sum([num_tokens_from_string(text) for text in texts])
 
     def encode_queries(self, text: str):
-        response = requests.post(f"{self.base_url}/embed", json={"inputs": text}, headers={"Content-Type": "application/json"})
-        if response.status_code == 200:
-            embedding = response.json()[0]
-            return np.array(embedding), num_tokens_from_string(text)
-        else:
-            raise Exception(f"Error: {response.status_code} - {response.text}")
+        response = requests.post(f"{self.base_url}/embed", json={"inputs": text}, headers={"Content-Type": "application/json"}, timeout=30)
+        _raise_model_exception_if_failed(response)
+        embedding = response.json()[0]
+        return np.array(embedding), num_tokens_from_string(text)
 
 
 class VolcEngineEmbed(Base):
@@ -952,8 +1085,11 @@ class VolcEngineEmbed(Base):
             base_url = "https://ark.cn-beijing.volces.com/api/v3"
         self.base_url = base_url
 
-        cfg = json.loads(key)
-        self.ark_api_key = cfg.get("ark_api_key", "")
+        try:
+            cfg = json.loads(key)
+            self.ark_api_key = cfg.get("ark_api_key", "")
+        except JSONDecodeError:
+            self.ark_api_key = key
         self.model_name = model_name
 
     @staticmethod
@@ -1137,7 +1273,8 @@ class PerplexityEmbed(Base):
                     "input": [[chunk] for chunk in batch],
                     "encoding_format": "base64_int8",
                 }
-                response = requests.post(url, headers=self.headers, json=payload)
+                response = requests.post(url, headers=self.headers, json=payload, timeout=30)
+                _raise_model_exception_if_failed(response)
                 try:
                     res = response.json()
                     for doc in res["data"]:
@@ -1156,7 +1293,8 @@ class PerplexityEmbed(Base):
                     "input": batch,
                     "encoding_format": "base64_int8",
                 }
-                response = requests.post(url, headers=self.headers, json=payload)
+                response = requests.post(url, headers=self.headers, json=payload, timeout=30)
+                _raise_model_exception_if_failed(response)
                 try:
                     res = response.json()
                     for d in res["data"]:

@@ -126,6 +126,112 @@ class OSConnection(DocStoreConnection):
         except Exception:
             logger.exception("OSConnection.createIndex error %s" % (indexName))
 
+    def create_doc_meta_idx(self, index_name: str):
+        """
+        Create a per-tenant document metadata index on OpenSearch.
+
+        Mirrors ESConnectionBase.create_doc_meta_idx so that the
+        DocMetadataService dispatches uniformly across ES and OS backends.
+        Index name pattern: ragflow_doc_meta_{tenant_id}
+        """
+        if self.index_exist(index_name, ""):
+            return True
+        try:
+            fp_mapping = os.path.join(get_project_base_directory(), "conf", "doc_meta_es_mapping.json")
+            if not os.path.exists(fp_mapping):
+                logger.error(f"Document metadata mapping file not found at {fp_mapping}")
+                return False
+
+            with open(fp_mapping, "r") as f:
+                doc_meta_mapping = json.load(f)
+
+            mappings = doc_meta_mapping["mappings"]
+            # `conf/doc_meta_es_mapping.json` declares a top-level
+            # `"dynamic": "runtime"`. Runtime fields are an Elasticsearch-only
+            # feature; OpenSearch cannot parse the value and rejects index
+            # creation with `mapper_parsing_exception: Could not convert
+            # [dynamic.dynamic] to boolean`. Fall back to standard dynamic
+            # mapping (`true`) on OpenSearch so dynamic field discovery is kept
+            # without the ES-specific runtime semantics. The shared mapping file
+            # is left untouched so the Elasticsearch backend still gets runtime
+            # fields.
+            if mappings.get("dynamic") == "runtime":
+                mappings = {**mappings, "dynamic": True}
+
+            from opensearchpy.client import IndicesClient
+            body = {
+                "settings": doc_meta_mapping["settings"],
+                "mappings": mappings,
+            }
+            return IndicesClient(self.os).create(index=index_name, body=body)
+        except Exception as e:
+            logger.exception(f"OSConnection.create_doc_meta_idx error creating {index_name}: {e}")
+            return False
+
+    def refresh_idx(self, index_name: str) -> bool:
+        """
+        Refresh an index so that recently inserted documents become searchable.
+
+        DocMetadataService used to call ``settings.docStoreConn.es.indices.refresh``
+        directly, which raised AttributeError on the OpenSearch backend because
+        OSConnection exposes ``self.os`` rather than ``self.es``. This wrapper
+        gives both backends a uniform abstract entry point.
+        """
+        try:
+            self.os.indices.refresh(index=index_name)
+            return True
+        except NotFoundError:
+            return False
+        except Exception as e:
+            logger.warning(f"OSConnection.refresh_idx({index_name}) failed: {e}")
+            return False
+
+    def count_idx(self, index_name: str) -> int:
+        """
+        Return the document count for an index, or -1 if the call fails.
+
+        Used by DocMetadataService._drop_empty_metadata_table to decide whether
+        a per-tenant metadata index is empty without paying a full search.
+        """
+        try:
+            response = self.os.count(index=index_name)
+            return int(response.get("count", 0))
+        except NotFoundError:
+            return 0
+        except Exception as e:
+            logger.warning(f"OSConnection.count_idx({index_name}) failed: {e}")
+            return -1
+
+    def replace_meta_fields(self, index_name: str, doc_id: str, meta_fields: dict) -> bool:
+        """
+        Replace the ``meta_fields`` object on a single document.
+
+        ES.update with a ``doc`` body deep-merges object fields, which retains
+        old keys that should be removed. The fix in ESConnection is a script
+        that fully assigns the new meta_fields. We provide the same primitive
+        on OpenSearch so the service layer never reaches into ``self.es`` or
+        ``self.os`` directly.
+        """
+        body = {
+            "script": {
+                "source": "ctx._source.meta_fields = params.meta_fields",
+                "params": {"meta_fields": meta_fields},
+            }
+        }
+        for _ in range(ATTEMPT_TIME):
+            try:
+                self.os.update(index=index_name, id=doc_id, body=body, refresh=True)
+                return True
+            except NotFoundError:
+                return False
+            except Exception as e:
+                logger.warning(f"OSConnection.replace_meta_fields({index_name}, {doc_id}) failed: {e}")
+                if re.search(r"(timeout|connection)", str(e).lower()):
+                    time.sleep(1)
+                    continue
+                return False
+        return False
+
     def delete_idx(self, indexName: str, knowledgebaseId: str):
         if len(knowledgebaseId) > 0:
             # The index need to be alive after any kb deletion since all kb under this tenant are in one index.
@@ -154,29 +260,29 @@ class OSConnection(DocStoreConnection):
     """
 
     def search(
-            self, selectFields: list[str],
-            highlightFields: list[str],
+            self, select_fields: list[str],
+            highlight_fields: list[str],
             condition: dict,
-            matchExprs: list[MatchExpr],
-            orderBy: OrderByExpr,
+            match_expressions: list[MatchExpr],
+            order_by: OrderByExpr,
             offset: int,
             limit: int,
-            indexNames: str | list[str],
-            knowledgebaseIds: list[str],
-            aggFields: list[str] = [],
+            index_names: str | list[str],
+            knowledgebase_ids: list[str],
+            agg_fields: list[str] = [],
             rank_feature: dict | None = None
     ):
         """
         Refers to https://github.com/opensearch-project/opensearch-py/blob/main/guides/dsl.md
         """
         use_knn = False
-        if isinstance(indexNames, str):
-            indexNames = indexNames.split(",")
-        assert isinstance(indexNames, list) and len(indexNames) > 0
+        if isinstance(index_names, str):
+            index_names = index_names.split(",")
+        assert isinstance(index_names, list) and len(index_names) > 0
         assert "_id" not in condition
 
         bqry = Q("bool", must=[])
-        condition["kb_id"] = knowledgebaseIds
+        condition["kb_id"] = knowledgebase_ids
         for k, v in condition.items():
             if k == "available_int":
                 if v == 0:
@@ -197,15 +303,15 @@ class OSConnection(DocStoreConnection):
 
         s = Search()
         vector_similarity_weight = 0.5
-        for m in matchExprs:
+        for m in match_expressions:
             if isinstance(m, FusionExpr) and m.method == "weighted_sum" and "weights" in m.fusion_params:
-                assert len(matchExprs) == 3 and isinstance(matchExprs[0], MatchTextExpr) and isinstance(matchExprs[1],
+                assert len(match_expressions) == 3 and isinstance(match_expressions[0], MatchTextExpr) and isinstance(match_expressions[1],
                                                                                                         MatchDenseExpr) and isinstance(
-                    matchExprs[2], FusionExpr)
+                    match_expressions[2], FusionExpr)
                 weights = m.fusion_params["weights"]
                 vector_similarity_weight = float(weights.split(",")[1])
         knn_query = {}
-        for m in matchExprs:
+        for m in match_expressions:
             if isinstance(m, MatchTextExpr):
                 minimum_should_match = m.extra_options.get("minimum_should_match", 0.0)
                 if isinstance(minimum_should_match, float):
@@ -241,12 +347,12 @@ class OSConnection(DocStoreConnection):
 
         if bqry:
             s = s.query(bqry)
-        for field in highlightFields:
+        for field in highlight_fields:
             s = s.highlight(field, force_source=True, no_match_size=30, require_field_match=False)
 
-        if orderBy:
+        if order_by:
             orders = list()
-            for field, order in orderBy.fields:
+            for field, order in order_by.fields:
                 order = "asc" if order == 0 else "desc"
                 if field in ["page_num_int", "top_int"]:
                     order_info = {"order": order, "unmapped_type": "float",
@@ -258,13 +364,13 @@ class OSConnection(DocStoreConnection):
                 orders.append({field: order_info})
             s = s.sort(*orders)
 
-        for fld in aggFields:
+        for fld in agg_fields:
             s.aggs.bucket(f'aggs_{fld}', 'terms', field=fld, size=1000000)
 
         if limit > 0:
             s = s[offset:offset + limit]
         q = s.to_dict()
-        logger.debug(f"OSConnection.search {str(indexNames)} query: " + json.dumps(q))
+        logger.debug(f"OSConnection.search {str(index_names)} query: " + json.dumps(q))
 
         if use_knn:
             del q["query"]
@@ -272,7 +378,7 @@ class OSConnection(DocStoreConnection):
 
         for i in range(ATTEMPT_TIME):
             try:
-                res = self.os.search(index=indexNames,
+                res = self.os.search(index=index_names,
                                      body=q,
                                      timeout=600,
                                      # search_type="dfs_query_then_fetch",
@@ -280,10 +386,10 @@ class OSConnection(DocStoreConnection):
                                      _source=True)
                 if str(res.get("timed_out", "")).lower() == "true":
                     raise Exception("OpenSearch Timeout.")
-                logger.debug(f"OSConnection.search {str(indexNames)} res: " + str(res))
+                logger.debug(f"OSConnection.search {str(index_names)} res: " + str(res))
                 return res
             except Exception as e:
-                logger.exception(f"OSConnection.search {str(indexNames)} query: " + str(q))
+                logger.exception(f"OSConnection.search {str(index_names)} query: " + str(q))
                 if str(e).find("Timeout") > 0:
                     continue
                 raise e
@@ -327,7 +433,7 @@ class OSConnection(DocStoreConnection):
             try:
                 res = []
                 r = self.os.bulk(index=(indexName), body=operations,
-                                 refresh=False, timeout=60)
+                                 refresh="wait_for", timeout=60)
                 if re.search(r"False", str(r["errors"]), re.IGNORECASE):
                     return res
 
@@ -572,6 +678,23 @@ class OSConnection(DocStoreConnection):
 
     def get_doc_ids(self, res):
         return [d["_id"] for d in res["hits"]["hits"]]
+
+    def get_scores(self, res) -> dict[str, float]:
+        """
+        Map hit `_id` to its raw `_score`. Used by rag/nlp/search.py:_knn_scores()
+        to recover the cosine similarity returned by a KNN-only second-pass search
+        without pulling the chunk vectors out of the index. OpenSearch hit headers
+        carry `_score` exactly like Elasticsearch, so this mirrors
+        ESConnectionBase.get_scores.
+        """
+        out = {}
+        for d in res.get("hits", {}).get("hits", []):
+            doc_id = d.get("_id")
+            if doc_id is None:
+                continue
+            score = d.get("_score")
+            out[doc_id] = float(score) if score is not None else 0.0
+        return out
 
     def __getSource(self, res):
         rr = []

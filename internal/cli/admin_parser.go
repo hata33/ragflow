@@ -190,6 +190,12 @@ func (p *Parser) parseAdminListCommand() (*Command, error) {
 		return NewCommand("list_user_chats"), nil
 	case TokenFiles:
 		return p.parseAdminListFiles()
+	case TokenTasks:
+		return p.parseAdminListTasks()
+	case TokenIngestors:
+		return p.parseAdminListIngestors()
+	case TokenIngestion:
+		return p.parseAdminListIngestionTasks()
 	default:
 		return nil, fmt.Errorf("unknown LIST target: %s", p.curToken.Value)
 	}
@@ -365,6 +371,30 @@ func (p *Parser) parseAdminListFiles() (*Command, error) {
 	if p.curToken.Type == TokenSemicolon {
 		p.nextToken()
 	}
+	return cmd, nil
+}
+
+func (p *Parser) parseAdminListTasks() (*Command, error) {
+	p.nextToken() // consume TASKS
+	cmd := NewCommand("list_admin_tasks")
+	return cmd, nil
+}
+
+func (p *Parser) parseAdminListIngestors() (*Command, error) {
+	p.nextToken() // consume TASKS
+	cmd := NewCommand("admin_list_ingestors")
+
+	return cmd, nil
+}
+
+func (p *Parser) parseAdminListIngestionTasks() (*Command, error) {
+	p.nextToken() // consume Ingestion
+
+	if p.curToken.Type != TokenTasks {
+		return nil, fmt.Errorf("expected TASKS")
+	}
+
+	cmd := NewCommand("list_admin_ingestion_tasks")
 	return cmd, nil
 }
 
@@ -700,8 +730,6 @@ func (p *Parser) parseAdminDropCommand() (*Command, error) {
 		return p.parseDropUser()
 	case TokenRole:
 		return p.parseDropRole()
-	case TokenModel:
-		return p.parseDropModelProvider()
 	case TokenDataset:
 		return p.parseDropDataset()
 	case TokenChat:
@@ -1167,7 +1195,7 @@ func (p *Parser) parseAdminSetVariable() (*Command, error) {
 	}
 
 	p.nextToken()
-	varValue, err := p.parseIdentifier()
+	varValue, err := p.parseVariableValue()
 	if err != nil {
 		return nil, err
 	}
@@ -1187,35 +1215,36 @@ func (p *Parser) parseAdminSetVariable() (*Command, error) {
 func (p *Parser) parseAdminSetDefault() (*Command, error) {
 	p.nextToken() // consume DEFAULT
 
-	var modelType, modelID string
+	var modelType string
 
 	switch p.curToken.Type {
-	case TokenLLM:
-		modelType = "llm_id"
-	case TokenVLM:
-		modelType = "img2txt_id"
+	case TokenChat:
+		modelType = "chat"
+	case TokenVision:
+		modelType = "vision"
 	case TokenEmbedding:
-		modelType = "embd_id"
-	case TokenReranker:
-		modelType = "reranker_id"
+		modelType = "embedding"
+	case TokenRerank:
+		modelType = "rerank"
 	case TokenASR:
-		modelType = "asr_id"
+		modelType = "asr"
 	case TokenTTS:
-		modelType = "tts_id"
+		modelType = "tts"
+	case TokenOCR:
+		modelType = "ocr"
 	default:
 		return nil, fmt.Errorf("unknown model type: %s", p.curToken.Value)
 	}
 
 	p.nextToken()
-	id, err := p.parseQuotedString()
+	compositeModelName, err := p.parseQuotedString()
 	if err != nil {
 		return nil, err
 	}
-	modelID = id
 
 	cmd := NewCommand("set_default_model")
 	cmd.Params["model_type"] = modelType
-	cmd.Params["model_id"] = modelID
+	cmd.Params["composite_model_name"] = compositeModelName
 
 	p.nextToken()
 	// Semicolon is optional for UNSET TOKEN
@@ -1254,18 +1283,20 @@ func (p *Parser) parseAdminResetCommand() (*Command, error) {
 
 	var modelType string
 	switch p.curToken.Type {
-	case TokenLLM:
-		modelType = "llm_id"
-	case TokenVLM:
-		modelType = "img2txt_id"
+	case TokenChat:
+		modelType = "chat"
+	case TokenVision:
+		modelType = "vision"
 	case TokenEmbedding:
-		modelType = "embd_id"
-	case TokenReranker:
-		modelType = "reranker_id"
+		modelType = "embedding"
+	case TokenRerank:
+		modelType = "rerank"
 	case TokenASR:
-		modelType = "asr_id"
+		modelType = "asr"
 	case TokenTTS:
-		modelType = "tts_id"
+		modelType = "tts"
+	case TokenOCR:
+		modelType = "ocr"
 	default:
 		return nil, fmt.Errorf("unknown model type: %s", p.curToken.Value)
 	}
@@ -1534,10 +1565,19 @@ func (p *Parser) parseAdminStartupCommand() (*Command, error) {
 
 func (p *Parser) parseAdminShutdownCommand() (*Command, error) {
 	p.nextToken() // consume SHUTDOWN
-	if p.curToken.Type != TokenService {
-		return nil, fmt.Errorf("expected SERVICE")
+
+	switch p.curToken.Type {
+	case TokenService:
+		return p.parseAdminShutdownServiceCommand()
+	case TokenIngestor:
+		return p.parseAdminShutdownIngestorCommand()
+	default:
+		return nil, fmt.Errorf("expected SERVICE or INGESTOR")
 	}
-	p.nextToken()
+}
+
+func (p *Parser) parseAdminShutdownServiceCommand() (*Command, error) {
+	p.nextToken() // consume SERVICE
 
 	serviceNum, err := p.parseNumber()
 	if err != nil {
@@ -1546,6 +1586,25 @@ func (p *Parser) parseAdminShutdownCommand() (*Command, error) {
 
 	cmd := NewCommand("shutdown_service")
 	cmd.Params["number"] = serviceNum
+
+	p.nextToken()
+	// Semicolon is optional for UNSET TOKEN
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	return cmd, nil
+}
+
+func (p *Parser) parseAdminShutdownIngestorCommand() (*Command, error) {
+	p.nextToken() // consume INGESTOR
+
+	ingestorName, err := p.parseQuotedString()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("admin_shutdown_ingestor_command")
+	cmd.Params["ingestor_name"] = ingestorName
 
 	p.nextToken()
 	// Semicolon is optional for UNSET TOKEN
@@ -1571,6 +1630,73 @@ func (p *Parser) parseAdminRestartCommand() (*Command, error) {
 	cmd.Params["number"] = serviceNum
 
 	p.nextToken()
+	// Semicolon is optional for UNSET TOKEN
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	return cmd, nil
+}
+
+func (p *Parser) parseStartIngestion() (*Command, error) {
+	p.nextToken() // consume Start
+
+	if p.curToken.Type != TokenIngestion {
+		return nil, fmt.Errorf("expect INGESTION")
+	}
+	p.nextToken() // consume Ingest
+
+	uri, err := p.parseQuotedString()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("admin_start_ingestion_command")
+	cmd.Params["uri"] = uri
+	p.nextToken()
+
+	// Semicolon is optional for UNSET TOKEN
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	return cmd, nil
+}
+
+func (p *Parser) parseStopIngestion() (*Command, error) {
+	p.nextToken() // consume Stop
+
+	if p.curToken.Type != TokenIngestion {
+		return nil, fmt.Errorf("expect INGESTION")
+	}
+	p.nextToken() // consume Ingest
+
+	taskID, err := p.parseQuotedString()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("admin_stop_ingestion_command")
+	cmd.Params["task_id"] = taskID
+	p.nextToken()
+
+	// Semicolon is optional for UNSET TOKEN
+	if p.curToken.Type == TokenSemicolon {
+		p.nextToken()
+	}
+	return cmd, nil
+}
+
+func (p *Parser) parseAdminIngestCommand() (*Command, error) {
+	p.nextToken() // consume Ingest
+
+	uri, err := p.parseQuotedString()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := NewCommand("admin_ingest_command")
+	cmd.Params["uri"] = uri
+	p.nextToken()
+
 	// Semicolon is optional for UNSET TOKEN
 	if p.curToken.Type == TokenSemicolon {
 		p.nextToken()

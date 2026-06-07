@@ -1,6 +1,6 @@
 import Spotlight from '@/components/spotlight';
 import { LLMFactory } from '@/constants/llm';
-import { LlmItem, useFetchMyLlmListDetailed } from '@/hooks/use-llm-request';
+// import { LlmItem, useFetchMyLlmListDetailed } from '@/hooks/use-llm-request';
 import { useCallback, useMemo } from 'react';
 import { isLocalLlmFactory } from '../utils';
 import SystemSetting from './components/system-setting';
@@ -14,9 +14,9 @@ import {
   useSubmitGoogle,
   useSubmitMinerU,
   useSubmitOllama,
+  useSubmitOpenDataLoader,
   useSubmitPaddleOCR,
   useSubmitSpark,
-  useSubmitSystemModelSetting,
   useSubmitTencentCloud,
   useSubmitVolcEngine,
   useSubmityiyan,
@@ -30,14 +30,13 @@ import GoogleModal from './modal/google-modal';
 import MinerUModal from './modal/mineru-modal';
 import TencentCloudModal from './modal/next-tencent-modal';
 import OllamaModal from './modal/ollama-modal';
+import OpenDataLoaderModal from './modal/opendataloader-modal';
 import PaddleOCRModal from './modal/paddleocr-modal';
 import SparkModal from './modal/spark-modal';
 import VolcEngineModal from './modal/volcengine-modal';
 import YiyanModal from './modal/yiyan-modal';
 const ModelProviders = () => {
-  const { saveSystemModelSettingLoading, onSystemSettingSavingOk } =
-    useSubmitSystemModelSetting();
-  const { data: detailedLlmList } = useFetchMyLlmListDetailed();
+  // const { data: detailedLlmList } = useFetchMyLlmListDetailed();
   const {
     saveApiKeyLoading,
     initialApiKey,
@@ -139,6 +138,14 @@ const ModelProviders = () => {
     paddleocrLoading,
   } = useSubmitPaddleOCR();
 
+  const {
+    opendataloaderVisible,
+    hideOpenDataLoaderModal,
+    showOpenDataLoaderModal,
+    onOpenDataLoaderOk,
+    opendataloaderLoading,
+  } = useSubmitOpenDataLoader();
+
   const ModalMap = useMemo(
     () => ({
       [LLMFactory.Bedrock]: showBedrockAddingModal,
@@ -151,6 +158,7 @@ const ModelProviders = () => {
       [LLMFactory.AzureOpenAI]: showAzureAddingModal,
       [LLMFactory.MinerU]: showMineruModal,
       [LLMFactory.PaddleOCR]: showPaddleOCRModal,
+      [LLMFactory.OpenDataLoader]: showOpenDataLoaderModal,
     }),
     [
       showBedrockAddingModal,
@@ -163,6 +171,7 @@ const ModelProviders = () => {
       showAzureAddingModal,
       showMineruModal,
       showPaddleOCRModal,
+      showOpenDataLoaderModal,
     ],
   );
 
@@ -180,31 +189,31 @@ const ModelProviders = () => {
     [showApiKeyModal, showLlmAddingModal, ModalMap],
   );
 
-  const handleEditModel = useCallback(
-    (model: any, factory: LlmItem) => {
-      if (factory) {
-        const detailedFactory = detailedLlmList[factory.name];
-        const detailedModel = detailedFactory?.llm?.find(
-          (m: any) => m.name === model.name,
-        );
+  // const handleEditModel = useCallback(
+  //   (model: any, factory: LlmItem) => {
+  //     if (factory) {
+  //       const detailedFactory = detailedLlmList[factory.name];
+  //       const detailedModel = detailedFactory?.llm?.find(
+  //         (m: any) => m.name === model.name,
+  //       );
 
-        const editData = {
-          llm_factory: factory.name,
-          llm_name: model.name,
-          model_type: model.type,
-        };
+  //       const editData = {
+  //         llm_factory: factory.name,
+  //         llm_name: model.name,
+  //         model_type: model.type,
+  //       };
 
-        if (isLocalLlmFactory(factory.name)) {
-          showLlmAddingModal(factory.name, true, editData, detailedModel);
-        } else if (factory.name in ModalMap) {
-          ModalMap[factory.name as keyof typeof ModalMap]();
-        } else {
-          showApiKeyModal(editData, true);
-        }
-      }
-    },
-    [showApiKeyModal, showLlmAddingModal, ModalMap, detailedLlmList],
-  );
+  //       if (isLocalLlmFactory(factory.name)) {
+  //         showLlmAddingModal(factory.name, true, editData, detailedModel);
+  //       } else if (factory.name in ModalMap) {
+  //         ModalMap[factory.name as keyof typeof ModalMap]();
+  //       } else {
+  //         showApiKeyModal(editData, true);
+  //       }
+  //     }
+  //   },
+  //   [showApiKeyModal, showLlmAddingModal, ModalMap, detailedLlmList],
+  // );
 
   const handleOk = useMemo(() => {
     if (apiKeyVisible) {
@@ -240,6 +249,9 @@ const ModelProviders = () => {
     if (paddleocrVisible) {
       return onPaddleOCROk;
     }
+    if (opendataloaderVisible) {
+      return onOpenDataLoaderOk;
+    }
     if (GoogleAddingVisible) {
       return onGoogleAddingOk;
     }
@@ -269,6 +281,8 @@ const ModelProviders = () => {
     onMineruOk,
     paddleocrVisible,
     onPaddleOCROk,
+    opendataloaderVisible,
+    onOpenDataLoaderOk,
   ]);
 
   const { onApiKeyVerifying } = useVerifySettings({
@@ -279,14 +293,8 @@ const ModelProviders = () => {
     <div className="flex w-full border-[0.5px] border-border-button rounded-lg relative ">
       <Spotlight />
       <section className="flex flex-col gap-4 w-3/5 px-5 border-r-[0.5px] border-border-button overflow-auto scrollbar-auto">
-        <SystemSetting
-          onOk={onSystemSettingSavingOk}
-          loading={saveSystemModelSettingLoading}
-        />
-        <UsedModel
-          handleAddModel={handleAddModel}
-          handleEditModel={handleEditModel}
-        />
+        <SystemSetting />
+        <UsedModel handleAddModel={handleAddModel} />
       </section>
       <section className="flex flex-col w-2/5 overflow-auto scrollbar-auto">
         <AvailableModels handleAddModel={handleAddModel} />
@@ -391,6 +399,13 @@ const ModelProviders = () => {
         loading={paddleocrLoading}
         onVerify={onApiKeyVerifying}
       ></PaddleOCRModal>
+      <OpenDataLoaderModal
+        visible={opendataloaderVisible}
+        hideModal={hideOpenDataLoaderModal}
+        onOk={onOpenDataLoaderOk}
+        loading={opendataloaderLoading}
+        onVerify={onApiKeyVerifying}
+      ></OpenDataLoaderModal>
     </div>
   );
 };

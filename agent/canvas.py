@@ -17,7 +17,6 @@ import asyncio
 import base64
 import datetime
 import inspect
-import binascii
 import json
 import logging
 import re
@@ -39,6 +38,7 @@ from common.misc_utils import get_uuid, hash_str2int
 from common.exceptions import TaskCanceledException
 from rag.prompts.generator import chunks_format
 from rag.utils.redis_conn import REDIS_CONN
+from rag.utils.tts_cache import synthesize_with_cache
 
 class Graph:
     """
@@ -263,7 +263,7 @@ class Graph:
         keys = path.split('.')
         if not path:
             return value
-        for key in keys:
+        for key in keys[:-1]:
             if key not in cur or not isinstance(cur[key], dict):
                 cur[key] = {}
             cur = cur[key]
@@ -354,23 +354,21 @@ class Canvas(Graph):
                 key = k[4:]
                 if key in self.variables:
                     variable = self.variables[key]
-                    if variable["type"] == "string":
-                        self.globals[k] = ""
-                        variable["value"] = ""
-                    elif variable["type"] == "number":
-                        self.globals[k] = 0
-                        variable["value"] = 0
-                    elif variable["type"] == "boolean":
-                        self.globals[k] = False
-                        variable["value"] = False
-                    elif variable["type"] == "object":
-                        self.globals[k] = {}
-                        variable["value"] = {}
-                    elif variable["type"].startswith("array"):
-                        self.globals[k] = []
-                        variable["value"] = []
+                    value = variable.get("value")
+                    if value is not None:
+                        self.globals[k] = value
                     else:
-                        self.globals[k] = ""
+                        var_type = variable.get("type", "")
+                        if var_type == "number":
+                            self.globals[k] = 0
+                        elif var_type == "boolean":
+                            self.globals[k] = False
+                        elif var_type == "object":
+                            self.globals[k] = {}
+                        elif var_type.startswith("array"):
+                            self.globals[k] = []
+                        else:  # "string" or unknown
+                            self.globals[k] = ""
                 else:
                     self.globals[k] = ""
 
@@ -381,8 +379,10 @@ class Canvas(Graph):
         self.message_id = get_uuid()
         created_at = int(time.time())
         self.add_user_input(kwargs.get("query"))
+        path_set = set(self.path)
         for k, cpn in self.components.items():
-            self.components[k]["obj"].reset(True)
+            if k in path_set:
+                self.components[k]["obj"].reset(True)
 
         if kwargs.get("webhook_payload"):
             for k, cpn in self.components.items():
@@ -402,7 +402,7 @@ class Canvas(Graph):
                 break
 
         for k in kwargs.keys():
-            if k in ["query", "user_id", "files"] and kwargs[k]:
+            if k in ["query", "user_id", "files", "chat_template_kwargs"] and kwargs[k]:
                 if k == "files":
                     self.globals[f"sys.{k}"] = await self.get_files_async(kwargs[k], layout_recognize)
                 else:
@@ -714,14 +714,7 @@ class Canvas(Graph):
         text = clean_tts_text(text)
         if not text:
             return None
-        bin = b""
-        try:
-            for chunk in tts_mdl.tts(text):
-                bin += chunk
-        except Exception as e:
-            logging.error(f"TTS failed: {e}, text={text!r}")
-            return None
-        return binascii.hexlify(bin).decode("utf-8")
+        return synthesize_with_cache(tts_mdl, text)
 
     def get_history(self, window_size):
         convs = []

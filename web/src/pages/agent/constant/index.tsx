@@ -587,7 +587,7 @@ export enum SortMethod {
 }
 
 export enum ListOperations {
-  TopN = 'topN',
+  Nth = 'nth',
   Head = 'head',
   Tail = 'tail',
   Filter = 'filter',
@@ -597,7 +597,8 @@ export enum ListOperations {
 
 export const initialListOperationsValues = {
   query: '',
-  operations: ListOperations.TopN,
+  operations: ListOperations.Nth,
+  strict: false,
   outputs: {
     // result: {
     //   type: 'Array<?>',
@@ -696,7 +697,8 @@ export const RestrictedUpstreamMap = {
   [Operator.Loop]: [Operator.Begin],
   [Operator.LoopStart]: [Operator.Begin],
   [Operator.ExitLoop]: [Operator.Begin],
-  [Operator.PDFGenerator]: [Operator.Begin],
+  [Operator.DocGenerator]: [Operator.Begin],
+  [Operator.Browser]: [Operator.Begin],
 };
 
 export const NodeMap = {
@@ -747,7 +749,8 @@ export const NodeMap = {
   [Operator.LoopStart]: 'loopStartNode',
   [Operator.ExitLoop]: 'exitLoopNode',
   [Operator.ExcelProcessor]: 'ragNode',
-  [Operator.PDFGenerator]: 'ragNode',
+  [Operator.DocGenerator]: 'ragNode',
+  [Operator.Browser]: 'ragNode',
 };
 
 export enum BeginQueryType {
@@ -963,68 +966,38 @@ export enum AgentVariableType {
   Conversation = 'conversation',
 }
 
-// PDF Generator enums
-export enum PDFGeneratorFontFamily {
-  Helvetica = 'Helvetica',
-  TimesRoman = 'Times-Roman',
-  Courier = 'Courier',
-  HelveticaBold = 'Helvetica-Bold',
-  TimesBold = 'Times-Bold',
-}
-
-export enum PDFGeneratorLogoPosition {
-  Left = 'left',
-  Center = 'center',
-  Right = 'right',
-}
-
-export enum PDFGeneratorPageSize {
-  A4 = 'A4',
-  Letter = 'Letter',
-}
-
-export enum PDFGeneratorOrientation {
-  Portrait = 'portrait',
-  Landscape = 'landscape',
-}
-
-export const initialPDFGeneratorValues = {
+export const initialDocGeneratorValues = {
   output_format: 'pdf',
   content: '',
-  title: '',
-  subtitle: '',
+  filename: '',
   header_text: '',
   footer_text: '',
-  logo_image: '',
-  logo_position: PDFGeneratorLogoPosition.Left,
-  logo_width: 2.0,
-  logo_height: 1.0,
-  font_family: PDFGeneratorFontFamily.Helvetica,
-  font_size: 12,
-  title_font_size: 24,
-  heading1_font_size: 18,
-  heading2_font_size: 16,
-  heading3_font_size: 14,
-  text_color: '#000000',
-  title_color: '#000000',
-  page_size: PDFGeneratorPageSize.A4,
-  orientation: PDFGeneratorOrientation.Portrait,
-  margin_top: 1.0,
-  margin_bottom: 1.0,
-  margin_left: 1.0,
-  margin_right: 1.0,
-  line_spacing: 1.2,
-  filename: '',
-  output_directory: '/tmp/pdf_outputs',
+  watermark_text: '',
   add_page_numbers: true,
   add_timestamp: true,
-  watermark_text: '',
-  enable_toc: false,
+  include_download_info_in_content: false,
+  font_size: 12,
   outputs: {
-    file_path: { type: 'string' },
-    pdf_base64: { type: 'string' },
+    doc_id: { type: 'string' },
+    filename: { type: 'string' },
+    mime_type: { type: 'string' },
+    size: { type: 'number' },
     download: { type: 'string' },
-    success: { type: 'boolean' },
+  },
+};
+
+export const initialBrowserValues = {
+  ...initialLlmBaseValues,
+  prompts: `{${AgentGlobals.SysQuery}}`,
+  max_steps: 30,
+  headless: true,
+  enable_default_extensions: false,
+  chromium_sandbox: false,
+  persist_session: true,
+  upload_sources: '',
+  outputs: {
+    content: { type: 'string', value: '' },
+    downloaded_files: { type: 'Array<Object>', value: [] },
   },
 };
 
